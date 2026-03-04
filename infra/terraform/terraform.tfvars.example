@@ -1,0 +1,30 @@
+# =============================================================================
+# infra/terraform/terraform.tfvars.example
+#
+# Copy to terraform.tfvars and fill in your values:
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# IMPORTANT: terraform.tfvars contains secrets — never commit it to git.
+#            It is already in .gitignore.
+# =============================================================================
+
+# Your Azure for Students subscription ID
+# Run: az account show --query id -o tsv
+subscription_id = "YOUR_SUBSCRIPTION_ID_HERE"
+
+# Your current public IPv4 (for SSH whitelist on Kong NSG)
+# Run: curl -4 -s ifconfig.me
+my_ip = "YOUR_PUBLIC_IP_HERE"
+
+# --- Optional overrides (defaults match Phase 2 deployment) ---
+
+# resource_group_name   = "rg-co3404-jokes"
+# location              = "malaysiawest"
+# vnet_name             = "vnet-jokes"
+# subnet_name           = "snet-jokes"
+# vm_size               = "Standard_B2ls_v2"
+# ssh_public_key_path   = "~/.ssh/co3404_key.pub"
+# ssh_private_key_path  = "~/.ssh/co3404_key"
+# vm1_private_ip        = "10.0.1.4"
+# vm2_private_ip        = "10.0.1.5"
+# rate_limit_per_minute = 5

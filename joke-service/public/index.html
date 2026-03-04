@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CO3404 – Joke Machine</title>
+  <style>
+    :root {
+      --bg:           #0f172a;
+      --surface:      #1e293b;
+      --surface2:     #334155;
+      --accent:       #6366f1;
+      --accent-hover: #4f46e5;
+      --text:         #f1f5f9;
+      --muted:        #94a3b8;
+      --success:      #22c55e;
+      --error:        #ef4444;
+      --radius:       12px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1rem;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 2.5rem;
+    }
+    header h1  { font-size: 2.2rem; color: var(--accent); }
+    header p   { color: var(--muted); margin-top: 0.4rem; font-size: 0.9rem; }
+
+    .controls {
+      background:    var(--surface);
+      border-radius: var(--radius);
+      padding:       1.8rem;
+      width:         100%;
+      max-width:     480px;
+      display:       flex;
+      flex-direction: column;
+      gap:           1.2rem;
+      margin-bottom: 2.5rem;
+    }
+
+    .form-group            { display: flex; flex-direction: column; gap: 0.4rem; }
+    .form-group label      { color: var(--muted); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.05em; }
+
+    select,
+    input[type="number"] {
+      width:         100%;
+      background:    var(--surface2);
+      border:        1px solid #475569;
+      color:         var(--text);
+      border-radius: 8px;
+      padding:       0.65rem 0.9rem;
+      font-size:     1rem;
+    }
+    select:focus,
+    input:focus { outline: none; border-color: var(--accent); }
+
+    button {
+      background:     var(--accent);
+      color:          #fff;
+      border:         none;
+      padding:        0.8rem;
+      border-radius:  8px;
+      font-size:      1rem;
+      cursor:         pointer;
+      transition:     background 0.2s;
+      font-weight:    600;
+    }
+    button:hover    { background: var(--accent-hover); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    /* ── Joke Cards ─────────────────────────────── */
+    #jokesContainer {
+      width:     100%;
+      max-width: 600px;
+      display:   flex;
+      flex-direction: column;
+      gap:       1.5rem;
+    }
+
+    .joke-card {
+      background:    var(--surface);
+      border-radius: var(--radius);
+      padding:       1.8rem;
+      border-left:   4px solid var(--accent);
+    }
+
+    .type-badge {
+      display:        inline-block;
+      background:     var(--accent);
+      color:          #fff;
+      font-size:      0.72rem;
+      padding:        0.2rem 0.7rem;
+      border-radius:  999px;
+      margin-bottom:  0.9rem;
+      text-transform: capitalize;
+      letter-spacing: 0.04em;
+    }
+
+    .setup { font-size: 1.1rem; line-height: 1.6; }
+
+    .timer {
+      color:     var(--muted);
+      font-size: 0.82rem;
+      margin-top: 0.8rem;
+    }
+
+    /* Punchline starts invisible; CSS transition reveals it */
+    .punchline {
+      margin-top: 1rem;
+      font-size:  1rem;
+      color:      var(--success);
+      font-style: italic;
+      opacity:    0;
+      transform:  translateY(8px);
+      transition: opacity 0.45s ease, transform 0.45s ease;
+    }
+    .punchline.revealed {
+      opacity:   1;
+      transform: translateY(0);
+    }
+
+    .loading { text-align: center; padding: 2rem; color: var(--muted); }
+    .error   { text-align: center; padding: 1rem; color: var(--error); }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>🤣 Joke Machine</h1>
+    <p>CO3404 Distributed Systems &mdash; Joke Microservice &mdash; Port 3001</p>
+  </header>
+
+  <div class="controls">
+    <div class="form-group">
+      <label for="typeSelect">Joke Type</label>
+      <select id="typeSelect">
+        <option value="any">🎲 Any Type</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="countInput">Number of Jokes</label>
+      <input type="number" id="countInput" value="1" min="1" max="10" />
+    </div>
+
+    <button id="getJokeBtn">Get Joke(s)</button>
+  </div>
+
+  <div id="jokesContainer"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

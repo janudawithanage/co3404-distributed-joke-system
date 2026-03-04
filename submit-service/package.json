@@ -1,0 +1,17 @@
+{
+  "name": "submit-service",
+  "version": "1.0.0",
+  "description": "CO3404 Distributed Systems – Joke submission microservice",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev":   "nodemon server.js"
+  },
+  "dependencies": {
+    "amqplib":           "^0.10.3",
+    "axios":             "^1.6.2",
+    "express":           "^4.18.2",
+    "swagger-jsdoc":     "^6.2.8",
+    "swagger-ui-express": "^5.0.0"
+  }
+}

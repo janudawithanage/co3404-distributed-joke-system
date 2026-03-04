@@ -1,0 +1,100 @@
+# =====================================================================
+# VM2 Docker Compose — submit-vm (Standard_B1s, 10.0.1.5)
+# =====================================================================
+# Services on this VM:
+#   rabbitmq       – message broker (AMQP 5672 VNet-only, UI 15672 restricted)
+#   submit-service – REST API + submit frontend (public port 3002)
+#
+# Cross-VM traffic:
+#   Submit → Joke service on VM1  via JOKE_SERVICE_URL=http://10.0.1.4:3001
+#   ETL (on VM1) → RabbitMQ here  via AMQP port 5672 (NSG VirtualNetwork tag)
+#
+# Networking:
+#   Both services share the "vm2_network" Docker bridge.
+#   RabbitMQ ports:
+#     5672  – host-bound but NSG blocks internet; only VNet peers reach it
+#     15672 – host-bound but NSG restricts to your IP only
+#   Submit port 3002 – public (NSG Allow-SubmitAPI)
+# =====================================================================
+
+version: '3.8'
+
+services:
+
+  # ─────────────────────────────────────────────────────────────────
+  # RabbitMQ 3.12 with Management UI
+  #
+  # Port exposure explained:
+  #   5672  – AMQP protocol. Bound to host so VM1's ETL can connect
+  #           via the Azure VNet (private IP 10.0.1.5:5672).
+  #           NSG rule Allow-AMQP-VNet uses "VirtualNetwork" service
+  #           tag → only Azure VNet traffic reaches this port.
+  #   15672 – Management UI. Bound to host but NSG restricts it to
+  #           your IP only (rule Allow-RabbitMQ-Management).
+  #           Never exposed to the public internet.
+  # ─────────────────────────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: jokes_rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      # Named volume — durable queue definitions and persistent messages
+      # survive container restarts and VM reboots.
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"    # AMQP — protected by NSG (VirtualNetwork tag only)
+      - "15672:15672"  # Management UI — protected by NSG (your IP only)
+    networks:
+      - vm2_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout:  5s
+      retries:  10
+      start_period: 30s
+
+  # ─────────────────────────────────────────────────────────────────
+  # Submit Service — public REST API + frontend + Swagger
+  #
+  # JOKE_SERVICE_URL points to VM1's private IP:3001 so that
+  # GET /types can proxy to the Joke service and populate the cache.
+  # The cache file lives on the "type_cache" named volume, so it
+  # persists across container restarts (fallback when VM1 is down).
+  # ─────────────────────────────────────────────────────────────────
+  submit-service:
+    build: ./submit-service
+    container_name: jokes_submit_service
+    environment:
+      RABBITMQ_HOST:     rabbitmq      # internal Docker DNS (same vm2_network)
+      RABBITMQ_USER:     ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      JOKE_SERVICE_URL:  ${JOKE_SERVICE_URL}   # http://10.0.1.4:3001 (VM1 private)
+      PORT:              3002
+    ports:
+      - "3002:3002"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      # Cache file survives container rebuilds and VM reboots.
+      # Ensures GET /types works even when VM1 (Joke service) is down.
+      - type_cache:/app/cache
+    networks:
+      - vm2_network
+    restart: unless-stopped
+
+# ─────────────────────────────────────────────────────────────────
+# Named volumes
+# ─────────────────────────────────────────────────────────────────
+volumes:
+  rabbitmq_data:
+    driver: local
+  type_cache:
+    driver: local
+
+networks:
+  vm2_network:
+    driver: bridge

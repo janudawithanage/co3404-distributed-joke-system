@@ -1,0 +1,174 @@
+# =====================================================
+# CO3404 Distributed Systems – docker-compose.yml
+# Phase 1: Local Development
+#
+# Architecture:
+#   Submit Service → RabbitMQ → ETL Service → MySQL
+#   Joke Service  ← ─────────────────────── MySQL
+#
+# All services communicate via the Docker bridge network
+# "jokes_network" using container name DNS resolution
+# (e.g., "mysql", "rabbitmq", "joke-service").
+# =====================================================
+
+version: '3.8'
+
+services:
+
+  # ───────────────────────────────────────────────────────
+  # MySQL 8 – Persistent relational database
+  # Init SQL runs automatically on first container creation
+  # ───────────────────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: jokes_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE:      ${DB_NAME}
+      MYSQL_USER:          ${DB_USER}
+      MYSQL_PASSWORD:      ${DB_PASSWORD}
+    volumes:
+      # Named volume: MySQL data survives container restarts/rebuilds
+      - mysql_data:/var/lib/mysql
+      # Seed script: executed once on first container start
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "3306:3306"
+    networks:
+      - jokes_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost",
+             "-u", "root", "--password=${DB_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout:  5s
+      retries:  10
+      start_period: 30s
+
+  # ───────────────────────────────────────────────────────
+  # RabbitMQ 3.12 – Message broker for async communication
+  # Enables decoupling: Submit → queue → ETL
+  # Management UI: http://localhost:15672 (guest/guest)
+  # ───────────────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: jokes_rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      # Named volume: queued messages survive RabbitMQ restarts
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"    # AMQP protocol
+      - "15672:15672"  # Management web UI
+    networks:
+      - jokes_network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout:  5s
+      retries:  10
+      start_period: 30s
+
+  # ───────────────────────────────────────────────────────
+  # Joke Service – Reads jokes from MySQL, serves frontend
+  # Frontend:  http://localhost:3001
+  # Health:    http://localhost:3001/health
+  # ───────────────────────────────────────────────────────
+  joke-service:
+    build: ./joke-service
+    container_name: jokes_joke_service
+    environment:
+      DB_HOST:     ${DB_HOST}
+      DB_USER:     ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME:     ${DB_NAME}
+      PORT:        3001
+    ports:
+      - "3001:3001"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - jokes_network
+    restart: unless-stopped
+
+  # ───────────────────────────────────────────────────────
+  # Submit Service – Accepts jokes, publishes to RabbitMQ
+  # Does NOT talk to MySQL directly (decoupled by design).
+  # Frontend:  http://localhost:3002
+  # Swagger:   http://localhost:3002/docs
+  # Health:    http://localhost:3002/health
+  # ───────────────────────────────────────────────────────
+  submit-service:
+    build: ./submit-service
+    container_name: jokes_submit_service
+    environment:
+      RABBITMQ_HOST:     ${RABBITMQ_HOST}
+      RABBITMQ_USER:     ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      JOKE_SERVICE_URL:  ${JOKE_SERVICE_URL}
+      PORT:              3002
+    ports:
+      - "3002:3002"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      # Shared named volume for the joke-type cache file.
+      # Allows Submit to return /types even when Joke service is down.
+      - type_cache:/app/cache
+    networks:
+      - jokes_network
+    restart: unless-stopped
+
+  # ───────────────────────────────────────────────────────
+  # ETL Service – Consumes RabbitMQ, writes to MySQL
+  # Internal service: no public UI
+  # Health:  http://localhost:3003/health
+  # ───────────────────────────────────────────────────────
+  etl-service:
+    build: ./etl-service
+    container_name: jokes_etl_service
+    environment:
+      DB_HOST:           ${DB_HOST}
+      DB_USER:           ${DB_USER}
+      DB_PASSWORD:       ${DB_PASSWORD}
+      DB_NAME:           ${DB_NAME}
+      RABBITMQ_HOST:     ${RABBITMQ_HOST}
+      RABBITMQ_USER:     ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      PORT:              3003
+    ports:
+      - "3003:3003"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - jokes_network
+    restart: unless-stopped
+
+# =====================================================
+# Named Volumes – Docker-managed persistent storage
+# Data survives container removal; must delete volumes
+# explicitly with: docker-compose down -v
+# =====================================================
+volumes:
+  mysql_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  type_cache:
+    driver: local
+
+# =====================================================
+# Custom Bridge Network
+# All containers share this network and can reach each
+# other using their service name as a DNS hostname.
+# e.g., http://joke-service:3001 resolves correctly.
+# =====================================================
+networks:
+  jokes_network:
+    driver: bridge

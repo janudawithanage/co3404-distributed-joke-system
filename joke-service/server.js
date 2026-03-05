@@ -26,6 +26,19 @@ const { pool, connectWithRetry } = require('./db');
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CORS — Allow browser requests from any origin (Kong acts as the single
+// public entry point; individual service CORS headers are a defence-in-depth
+// measure for direct VM access during development/testing).
+// ─────────────────────────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 app.use(express.json());
 
 // Serve static files from /public (frontend HTML + JS)

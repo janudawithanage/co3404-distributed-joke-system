@@ -32,9 +32,15 @@ services:
   # ---------------------------------------------------------------------------
   # Joke Service — VM1 (${vm1_private_ip}:3001)
   #
-  # Route:  /joke  (prefix, strip_path=false)
+  # Route 1: /joke   (prefix, strip_path=false)  → API endpoints
   #   Kong receives:   GET /joke/programming
   #   Forwards to:     GET http://${vm1_private_ip}:3001/joke/programming
+  #
+  # Route 2: /types  (strip_path=false)           → joke type list
+  #
+  # Route 3: /joke-ui (strip_path=true)           → Joke Machine frontend HTML
+  #   Kong receives:   GET /joke-ui
+  #   Forwards to:     GET http://${vm1_private_ip}:3001/
   #
   # Rate limiting: ${rate_limit_per_minute} requests/minute per client IP.
   # Demonstrating that a downstream service can be protected by Kong
@@ -54,6 +60,13 @@ services:
         preserve_host:  false
         methods:        [GET, HEAD, OPTIONS]
 
+      # Exposes the Joke Machine HTML frontend at /joke-ui through Kong
+      - name:           joke-frontend-route
+        paths:          [/joke-ui]
+        strip_path:     true
+        preserve_host:  false
+        methods:        [GET, OPTIONS]
+
     plugins:
       - name: rate-limiting
         config:
@@ -66,9 +79,12 @@ services:
   # ---------------------------------------------------------------------------
   # Submit Service — VM2 (${vm2_private_ip}:3002)
   #
-  # Route:  /submit  (prefix, strip_path=false)
-  #   Kong receives:   POST /submit
-  #   Forwards to:     POST http://${vm2_private_ip}:3002/submit
+  # Two routes are needed:
+  #   1. GET  /submit  (strip_path=true)  → / on VM2  → serves the HTML frontend
+  #   2. POST /submit  (strip_path=false) → /submit on VM2 → joke submission API
+  #
+  # A third route exposes /types so the frontend JS (fetch('/types')) can reach
+  # the Submit service's proxy endpoint without leaving Kong.
   #
   # No rate limiting on submit — demonstrates per-service plugin configuration.
   # ---------------------------------------------------------------------------
@@ -80,8 +96,23 @@ services:
     retries:          3
 
     routes:
-      - name:           submit-route
+      # Serves the submit HTML frontend (express.static at /)
+      - name:           submit-frontend-route
+        paths:          [/submit]
+        strip_path:     true
+        preserve_host:  false
+        methods:        [GET, OPTIONS]
+
+      # Forwards POST /submit → POST /submit on VM2 (joke submission API)
+      - name:           submit-api-route
         paths:          [/submit]
         strip_path:     false
         preserve_host:  false
-        methods:        [GET, POST, OPTIONS]
+        methods:        [POST]
+
+      # Exposes /types so the frontend JS (fetch('/types')) works through Kong
+      - name:           submit-types-route
+        paths:          [/types]
+        strip_path:     false
+        preserve_host:  false
+        methods:        [GET]

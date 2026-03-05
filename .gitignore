@@ -1,10 +1,15 @@
 node_modules/
 .env
 *.log
+# Keep example files — they are safe to commit (no real secrets)
+!.env.example
+!infra/.env.vm1.example
+!infra/.env.vm2.example
 
 # ── Terraform ────────────────────────────────────────────────────────────────
 infra/terraform/.terraform/
 infra/terraform/.terraform.lock.hcl
+infra/terraform/.terraform.tfstate.lock.info
 infra/terraform/terraform.tfstate
 infra/terraform/terraform.tfstate.backup
 infra/terraform/terraform.tfvars

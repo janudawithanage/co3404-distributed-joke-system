@@ -39,7 +39,19 @@ const CACHE_DIR  = '/app/cache';
 const CACHE_FILE = path.join(CACHE_DIR, 'types.json');
 
 const JOKE_SERVICE_URL = process.env.JOKE_SERVICE_URL || 'http://joke-service:3001';
-
+// ─────────────────────────────────────────────────────────────────────────────
+// CORS — Allow browser requests from any origin.
+// Required when the frontend is served through Kong HTTPS and makes API calls
+// back through the same Kong origin (relative paths). Defence-in-depth for
+// direct VM access during testing.
+// ─────────────────────────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -55,7 +67,8 @@ const swaggerOptions = {
       description: 'CO3404 Distributed Systems – Submit new jokes to the RabbitMQ queue'
     },
     servers: [
-      { url: `http://localhost:${PORT}`, description: 'Local Docker' }
+      { url: `http://localhost:${PORT}`, description: 'Local Docker' },
+      { url: 'https://KONG_PUBLIC_IP',   description: 'Kong API Gateway (replace KONG_PUBLIC_IP)' }
     ]
   },
   apis: ['./server.js'] // source file containing @swagger annotations

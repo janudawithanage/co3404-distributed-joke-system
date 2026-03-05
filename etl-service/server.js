@@ -148,21 +148,42 @@ async function startConsumer() {
           const raw = msg.content.toString();
           console.log('[ETL] Received:', raw);
 
+          // ── Step 1: Parse — permanent failure if invalid JSON ──
+          let joke;
           try {
-            const joke = JSON.parse(raw);
+            joke = JSON.parse(raw);
+          } catch (parseErr) {
+            // Malformed JSON can never be fixed by requeuing.
+            // nack with requeue=false discards the message (dead-letter).
+            console.error('[ETL] ❌ Invalid JSON — discarding message:', raw);
+            channel.nack(msg, false, false);
+            return;
+          }
+
+          // ── Step 2: Validate — permanent failure if fields missing ──
+          if (!joke.setup || !joke.punchline || !joke.type) {
+            console.error('[ETL] ❌ Missing fields — discarding message:', joke);
+            channel.nack(msg, false, false);
+            return;
+          }
+
+          // ── Step 3: Write to DB — transient failure → requeue ─────
+          try {
             await insertJoke(joke);
 
             // ACK only after successful DB write.
             // If we crash here before ACK, RabbitMQ re-delivers.
             channel.ack(msg);
 
-          } catch (err) {
-            console.error('[ETL] ❌ Failed to process message:', err.message);
+          } catch (dbErr) {
+            console.error('[ETL] ❌ DB write failed — requeuing message:', dbErr.message);
 
             // nack(msg, allUpTo=false, requeue=true)
-            // Requeues the message for another delivery attempt.
-            // Note: in production you would add a dead-letter queue
-            // to handle poison messages that always fail.
+            // DB errors are transient — requeue so the ETL retries
+            // once the DB recovers (e.g. after a MySQL restart).
+            // Note: In production add a dead-letter exchange with a
+            // max-retry counter to prevent infinite loops on a bad
+            // but well-formed message.
             channel.nack(msg, false, true);
           }
         });

@@ -30,24 +30,24 @@ plugins:
 services:
 
   # ---------------------------------------------------------------------------
-  # Joke Service — VM1 (${vm1_private_ip}:3001)
+  # Joke Service — VM1 (${vm1_private_ip}:3000)
   #
   # Route 1: /joke   (prefix, strip_path=false)  → API endpoints
   #   Kong receives:   GET /joke/programming
-  #   Forwards to:     GET http://${vm1_private_ip}:3001/joke/programming
+  #   Forwards to:     GET http://${vm1_private_ip}:3000/joke/programming
   #
   # Route 2: /types  (strip_path=false)           → joke type list
   #
   # Route 3: /joke-ui (strip_path=true)           → Joke Machine frontend HTML
   #   Kong receives:   GET /joke-ui
-  #   Forwards to:     GET http://${vm1_private_ip}:3001/
+  #   Forwards to:     GET http://${vm1_private_ip}:3000/
   #
   # Rate limiting: ${rate_limit_per_minute} requests/minute per client IP.
   # Demonstrating that a downstream service can be protected by Kong
   # without modifying the service itself.
   # ---------------------------------------------------------------------------
   - name: joke-service
-    url:              http://${vm1_private_ip}:3001
+    url:              http://${vm1_private_ip}:3000
     connect_timeout:  5000
     read_timeout:     10000
     write_timeout:    10000
@@ -77,7 +77,7 @@ services:
           hide_client_headers: false    # expose X-RateLimit-Remaining-Minute header
 
   # ---------------------------------------------------------------------------
-  # Submit Service — VM2 (${vm2_private_ip}:3002)
+  # Submit Service — VM2 (${vm2_private_ip}:3200)
   #
   # Two routes are needed:
   #   1. GET  /submit  (strip_path=true)  → / on VM2  → serves the HTML frontend
@@ -89,7 +89,7 @@ services:
   # No rate limiting on submit — demonstrates per-service plugin configuration.
   # ---------------------------------------------------------------------------
   - name: submit-service
-    url:              http://${vm2_private_ip}:3002
+    url:              http://${vm2_private_ip}:3200
     connect_timeout:  5000
     read_timeout:     10000
     write_timeout:    10000
@@ -116,57 +116,30 @@ services:
         strip_path:     false
         preserve_host:  false
         methods:        [GET]
-# Exposes the Swagger UI at /docs through Kong HTTPS
-      # Demonstrates OpenAPI/Swagger compliance requirement
-      - name:           submit-docs-route
+
+      # GET /docs — Swagger / OpenAPI documentation UI
+      - name:           docs-route
         paths:          [/docs]
         strip_path:     false
         preserve_host:  false
         methods:        [GET]
 
   # ---------------------------------------------------------------------------
-  # Moderator Service -- VM2 (${vm2_private_ip}:3004)
+  # RabbitMQ Management UI — VM2 (${vm2_private_ip}:15672)
   #
-  # Sits between the Submit and ETL services in the Option 4 pipeline.
-  # Human moderators review pending jokes before they reach the database.
-  #
-  # Routes:
-  #   GET  /moderate-ui  (strip_path=true)  -> serves the moderator HTML UI
-  #   GET  /moderate                        -> pull next pending joke from queue
-  #   POST /moderated                       -> approve joke (ack + forward to ETL)
-  #   POST /reject                          -> reject joke (nack, discard)
-  #
-  # read_timeout raised to 30 s because GET /moderate does a manual-ACK
-  # channel.get() which may block briefly waiting for a message.
+  # GET /mq-admin  → RabbitMQ Management UI (credentials: RABBITMQ_USER/PASS)
+  # strip_path:true strips /mq-admin so RabbitMQ receives requests at /
   # ---------------------------------------------------------------------------
-  - name: moderator-service
-    url:              http://${vm2_private_ip}:3004
+  - name: rabbitmq-management
+    url:              http://${vm2_private_ip}:15672
     connect_timeout:  5000
-    read_timeout:     30000
+    read_timeout:     10000
     write_timeout:    10000
-    retries:          2
+    retries:          1
 
     routes:
-      - name:           moderate-ui-route
-        paths:          [/moderate-ui]
+      - name:           mq-admin-route
+        paths:          [/mq-admin]
         strip_path:     true
         preserve_host:  false
-        methods:        [GET, OPTIONS]
-
-      - name:           moderate-get-route
-        paths:          [/moderate]
-        strip_path:     false
-        preserve_host:  false
-        methods:        [GET]
-
-      - name:           moderated-post-route
-        paths:          [/moderated]
-        strip_path:     false
-        preserve_host:  false
-        methods:        [POST]
-
-      - name:           reject-post-route
-        paths:          [/reject]
-        strip_path:     false
-        preserve_host:  false
-        methods:        [POST]
+        methods:        [GET, POST, PUT, DELETE, OPTIONS]

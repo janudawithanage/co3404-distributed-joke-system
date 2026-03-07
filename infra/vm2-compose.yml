@@ -6,7 +6,7 @@
 #   submit-service – REST API + submit frontend (public port 3002)
 #
 # Cross-VM traffic:
-#   Submit → Joke service on VM1  via JOKE_SERVICE_URL=http://10.0.1.4:3001
+#   Submit → Joke service on VM1  via JOKE_SERVICE_URL=http://10.0.1.4:3000
 #   ETL (on VM1) → RabbitMQ here  via AMQP port 5672 (NSG VirtualNetwork tag)
 #
 # Networking:
@@ -16,8 +16,6 @@
 #     15672 – host-bound but NSG restricts to your IP only
 #   Submit port 3002 – public (NSG Allow-SubmitAPI)
 # =====================================================================
-
-version: '3.8'
 
 services:
 
@@ -71,11 +69,10 @@ services:
       RABBITMQ_HOST:     rabbitmq      # internal Docker DNS (same vm2_network)
       RABBITMQ_USER:     ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
-      JOKE_SERVICE_URL:  ${JOKE_SERVICE_URL}   # http://10.0.1.4:3001 (VM1 private)
-      KONG_PUBLIC_IP:    ${KONG_PUBLIC_IP:-}   # Optional: populates Swagger server URL
-      PORT:              3002
+      JOKE_SERVICE_URL:  ${JOKE_SERVICE_URL}   # http://10.0.1.4:3000 (VM1 private, joke-service host port)
+      PORT:              4200
     ports:
-      - "3002:3002"
+      - "3200:4200"
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -83,44 +80,6 @@ services:
       # Cache file survives container rebuilds and VM reboots.
       # Ensures GET /types works even when VM1 (Joke service) is down.
       - type_cache:/app/cache
-    networks:
-      - vm2_network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3002/health"]
-      interval: 15s
-      timeout:  5s
-      retries:  5
-      start_period: 20s
-
-  # ─────────────────────────────────────────────────────────────────
-  # Moderator Service — NEW in Option 4
-  # Sits between Submit and ETL in the pipeline.
-  # Runs on VM2 alongside RabbitMQ so it can use Docker-internal DNS
-  # "rabbitmq" to connect to the broker (no cross-VM AMQP needed).
-  #
-  # Flow:
-  #   Submit → [submit queue] → Moderator → [moderated queue] → ETL
-  #
-  # Kong proxies /moderate-ui, /moderate, /moderated, /reject here.
-  # ─────────────────────────────────────────────────────────────────
-  moderator-service:
-    build: ./moderator-service
-    container_name: jokes_moderator_service
-    environment:
-      RABBITMQ_HOST:     rabbitmq      # internal Docker DNS (same vm2_network)
-      RABBITMQ_USER:     ${RABBITMQ_USER}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
-      JOKE_SERVICE_URL:  ${JOKE_SERVICE_URL}   # http://10.0.1.4:3001 (VM1 private)
-      PORT:              3004
-    ports:
-      - "3004:3004"
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
-    volumes:
-      # Named volume for types cache — updated at startup + via ECST events.
-      - mod_type_cache:/app/cache
     networks:
       - vm2_network
     restart: unless-stopped
@@ -132,8 +91,6 @@ volumes:
   rabbitmq_data:
     driver: local
   type_cache:
-    driver: local
-  mod_type_cache:
     driver: local
 
 networks:

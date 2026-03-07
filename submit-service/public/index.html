@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <base href="/submit/" />
   <title>CO3404 – Submit a Joke</title>
   <style>
     :root {
@@ -109,7 +110,7 @@
 
   <header>
     <h1>📬 Submit a Joke</h1>
-    <p>CO3404 Distributed Systems &mdash; Submit Microservice &mdash; Port 3002</p>
+    <p>CO3404 Distributed Systems &mdash; Submit Microservice &mdash; Port 3200 (direct) / Kong :8000/submit</p>
   </header>
 
   <div class="form-card">
@@ -139,7 +140,7 @@
 
   <div class="footer-links">
     <a href="/docs"   target="_blank">📄 Swagger API Docs</a>
-    <a href="/health" target="_blank">❤️ Health Check</a>
+    <a href="/joke/any" target="_blank">🤣 View Jokes (via Kong)</a>
   </div>
 
   <script src="app.js"></script>

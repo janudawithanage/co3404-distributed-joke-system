@@ -3,7 +3,7 @@
 # =====================================================================
 # Services on this VM:
 #   mysql        – relational database (internal only, no public port)
-#   joke-service – REST API + static frontend (public port 3001)
+#   joke-service – REST API + static frontend (public port 3000)
 #   etl-service  – RabbitMQ consumer → MySQL writer (internal only)
 #
 # Cross-VM traffic:
@@ -16,8 +16,6 @@
 #   Only joke-service exposes port 3001 to the host NIC, which is then
 #   reachable on the public IP (allowed by NSG rule Allow-JokeAPI).
 # =====================================================================
-
-version: '3.8'
 
 services:
 
@@ -54,8 +52,8 @@ services:
 
   # ─────────────────────────────────────────────────────────────────
   # Joke Service — public REST API + static frontend
-  # Port 3001 mapped to host → reachable on VM1 public IP.
-  # NSG rule Allow-JokeAPI allows TCP 3001 from Any.
+  # Port 3000 mapped to host → reachable on VM1 public IP.
+  # NSG rule Allow-JokeAPI allows TCP 3000 from Any.
   # ─────────────────────────────────────────────────────────────────
   joke-service:
     build: ./joke-service
@@ -65,21 +63,15 @@ services:
       DB_USER:     ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME:     ${DB_NAME}
-      PORT:        3001
+      PORT:        4000
     ports:
-      - "3001:3001"
+      - "3000:4000"
     depends_on:
       mysql:
         condition: service_healthy
     networks:
       - vm1_network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
-      interval: 15s
-      timeout:  5s
-      retries:  5
-      start_period: 20s
 
   # ─────────────────────────────────────────────────────────────────
   # ETL Service — RabbitMQ consumer
@@ -98,7 +90,7 @@ services:
       RABBITMQ_HOST:     ${RABBITMQ_HOST}   # VM2 private IP, e.g. 10.0.1.5
       RABBITMQ_USER:     ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
-      PORT:              3003
+      PORT:              4001
     depends_on:
       mysql:
         condition: service_healthy
@@ -108,12 +100,6 @@ services:
     networks:
       - vm1_network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3003/health"]
-      interval: 15s
-      timeout:  5s
-      retries:  5
-      start_period: 20s
 
 # ─────────────────────────────────────────────────────────────────
 # Named volumes — managed by Docker, survive container rebuilds.

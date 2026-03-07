@@ -18,8 +18,8 @@ set -euo pipefail
 # ─── CONFIGURE THESE ────────────────────────────────────────────────────────
 # Replace these with your actual VM public IPs from the Azure portal.
 # To find them: az vm list-ip-addresses -g rg-co3404-jokes -o table
-VM1_IP="85.211.178.130"
-VM2_IP="85.211.241.251"
+VM1_IP="REPLACE_WITH_VM1_PUBLIC_IP"
+VM2_IP="REPLACE_WITH_VM2_PUBLIC_IP"
 SSH_KEY="$HOME/.ssh/co3404_key"
 REMOTE_USER="azureuser"
 REMOTE_DIR="~/co3404"

@@ -24,7 +24,7 @@ const path    = require('path');
 const { pool, connectWithRetry } = require('./db');
 
 const app  = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 4000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CORS — Allow browser requests from any origin (Kong acts as the single
@@ -43,6 +43,9 @@ app.use(express.json());
 
 // Serve static files from /public (frontend HTML + JS)
 app.use(express.static(path.join(__dirname, 'public')));
+// Also serve at /joke-ui/ prefix so that <base href="/joke-ui/"> in index.html
+// resolves assets correctly when the page is loaded via Kong's /joke-ui route.
+app.use('/joke-ui', express.static(path.join(__dirname, 'public')));
 
 // ─────────────────────────────────────────────────────────────
 // GET /types
@@ -50,7 +53,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 //
 // This endpoint is also consumed by the Submit Service via HTTP
 // to populate its type cache — a service-to-service call within
-// the Docker network (http://joke-service:3001/types).
+// the Docker network (http://joke-service:4000/types).
 // ─────────────────────────────────────────────────────────────
 app.get('/types', async (req, res) => {
   try {

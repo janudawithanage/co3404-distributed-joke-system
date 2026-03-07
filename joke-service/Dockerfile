@@ -15,6 +15,6 @@ RUN npm install --production
 # Copy application source after dependencies are installed
 COPY . .
 
-EXPOSE 3001
+EXPOSE 4000
 
 CMD ["node", "server.js"]

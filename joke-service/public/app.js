@@ -119,5 +119,10 @@ function escapeHtml(str) {
 /* ── Init ─────────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', () => {
   loadTypes();
+
+  // Requirement: refresh types from the API each time the dropdown is
+  // interacted with (opened), so newly added types are always visible.
+  document.getElementById('typeSelect').addEventListener('focus', loadTypes);
+
   document.getElementById('getJokeBtn').addEventListener('click', getJokes);
 });

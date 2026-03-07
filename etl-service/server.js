@@ -46,12 +46,9 @@ const express = require('express');
 const { pool, connectWithRetry } = require('./db');
 
 const app  = express();
-const PORT = process.env.PORT || 3003;
+const PORT = process.env.PORT || 4001;
 
-// Option 3: consumed 'jokes_queue' directly.
-// Option 4: Submit → Moderator → 'moderated' queue → ETL → MySQL
-const QUEUE_NAME       = 'moderated';
-const TYPE_UPDATE_EXCH = 'type_updates'; // fanout exchange for ECST events
+const QUEUE_NAME = 'submitted_jokes';
 
 function getRabbitMQUrl() {
   const host = process.env.RABBITMQ_HOST     || 'rabbitmq';
@@ -76,17 +73,10 @@ function getRabbitMQUrl() {
  */
 async function getOrCreateType(typeName) {
   const name = typeName.trim().toLowerCase();
-
-  // INSERT IGNORE: silently skips if the type already exists (UNIQUE constraint).
-  const [result] = await pool.query(
+  await pool.query(
     'INSERT IGNORE INTO types (name) VALUES (?)',
     [name]
   );
-
-  // affectedRows > 0 means the row was actually inserted (brand-new type).
-  // This drives the type_update event for Event-Carried State Transfer.
-  const isNew = result.affectedRows > 0;
-
   const [rows] = await pool.query(
     'SELECT id FROM types WHERE name = ?',
     [name]
@@ -94,7 +84,7 @@ async function getOrCreateType(typeName) {
   if (!rows.length) {
     throw new Error(`Type not found after INSERT IGNORE: "${name}"`);
   }
-  return { id: rows[0].id, name, isNew };
+  return rows[0].id;
 }
 
 /**
@@ -109,16 +99,14 @@ async function insertJoke({ setup, punchline, type }) {
   if (!setup || !punchline || !type) {
     throw new Error('Message missing required fields: setup, punchline, type');
   }
-  const typeInfo = await getOrCreateType(type);
+  const typeId = await getOrCreateType(type);
   await pool.query(
     'INSERT INTO jokes (setup, punchline, type_id) VALUES (?, ?, ?)',
-    [setup, punchline, typeInfo.id]
+    [setup, punchline, typeId]
   );
   console.log(
     `[ETL] ✅ Inserted joke (type: ${type}): "${String(setup).substring(0, 50)}…"`
   );
-  // Return typeInfo so the caller can publish a type_update event if isNew
-  return typeInfo;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -135,11 +123,6 @@ async function startConsumer() {
 
       // durable: true – queue definition survives broker restart
       await channel.assertQueue(QUEUE_NAME, { durable: true });
-
-      // Assert the fanout exchange used for Event-Carried State Transfer.
-      // ETL publishes here when a brand-new type is created.
-      // Moderator and Submit services bind their own queues to this exchange.
-      await channel.assertExchange(TYPE_UPDATE_EXCH, 'fanout', { durable: true });
 
       // prefetch(1) – process one message at a time
       channel.prefetch(1);
@@ -186,32 +169,11 @@ async function startConsumer() {
 
           // ── Step 3: Write to DB — transient failure → requeue ─────
           try {
-            const typeInfo = await insertJoke(joke);
+            await insertJoke(joke);
 
             // ACK only after successful DB write.
             // If we crash here before ACK, RabbitMQ re-delivers.
             channel.ack(msg);
-
-            // ── Event-Carried State Transfer ─────────────────────────
-            // If insertJoke created a brand-new type, broadcast a
-            // type_update event to the 'type_updates' fanout exchange.
-            // The moderator and submit services subscribe to this exchange
-            // via their own queues (mod_type_update / sub_type_update) and
-            // update their local type caches without polling the database.
-            if (typeInfo.isNew) {
-              const event = {
-                event:     'type_update',
-                type:      { id: typeInfo.id, name: typeInfo.name },
-                timestamp: new Date().toISOString()
-              };
-              channel.publish(
-                TYPE_UPDATE_EXCH,
-                '',   // fanout ignores the routing key
-                Buffer.from(JSON.stringify(event)),
-                { persistent: true }
-              );
-              console.log(`[ETL] 📢 type_update event published for new type: "${typeInfo.name}"`);
-            }
 
           } catch (dbErr) {
             console.error('[ETL] ❌ DB write failed — requeuing message:', dbErr.message);

@@ -74,6 +74,12 @@ services:
     networks:
       - vm1_network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 15s
+      timeout:  5s
+      retries:  5
+      start_period: 20s
 
   # ─────────────────────────────────────────────────────────────────
   # ETL Service — RabbitMQ consumer
@@ -102,6 +108,12 @@ services:
     networks:
       - vm1_network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3003/health"]
+      interval: 15s
+      timeout:  5s
+      retries:  5
+      start_period: 20s
 
 # ─────────────────────────────────────────────────────────────────
 # Named volumes — managed by Docker, survive container rebuilds.

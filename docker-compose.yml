@@ -124,6 +124,8 @@ services:
 
   # ───────────────────────────────────────────────────────
   # ETL Service – Consumes RabbitMQ, writes to MySQL
+  # Option 4: now consumes from "moderated" queue (not "jokes_queue")
+  # and publishes type_update events to the type_updates exchange.
   # Internal service: no public UI
   # Health:  http://localhost:3003/health
   # ───────────────────────────────────────────────────────
@@ -150,6 +152,39 @@ services:
       - jokes_network
     restart: unless-stopped
 
+  # ───────────────────────────────────────────────────────
+  # Moderator Service — NEW in Option 4
+  # Sits between Submit and ETL in the processing pipeline.
+  # Humans review, edit, approve or reject jokes before
+  # they reach the database.
+  #
+  # Flow: Submit → [submit queue] → Moderator → [moderated queue] → ETL
+  #
+  # UI:     http://localhost:3004
+  # Health: http://localhost:3004/health
+  # ───────────────────────────────────────────────────────
+  moderator-service:
+    build: ./moderator-service
+    container_name: jokes_moderator_service
+    environment:
+      RABBITMQ_HOST:     ${RABBITMQ_HOST}
+      RABBITMQ_USER:     ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      JOKE_SERVICE_URL:  ${JOKE_SERVICE_URL}
+      PORT:              3004
+    ports:
+      - "3004:3004"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      # Named volume for the types cache file.
+      # Updated at startup and via type_update events (ECST).
+      - mod_type_cache:/app/cache
+    networks:
+      - jokes_network
+    restart: unless-stopped
+
 # =====================================================
 # Named Volumes – Docker-managed persistent storage
 # Data survives container removal; must delete volumes
@@ -161,6 +196,8 @@ volumes:
   rabbitmq_data:
     driver: local
   type_cache:
+    driver: local
+  mod_type_cache:
     driver: local
 
 # =====================================================

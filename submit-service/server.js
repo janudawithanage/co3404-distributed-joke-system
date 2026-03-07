@@ -29,16 +29,16 @@ const fs           = require('fs').promises;
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi    = require('swagger-ui-express');
 
-const { connect, publishJoke, onTypeUpdate } = require('./rabbitmq');
+const { connect, publishJoke } = require('./rabbitmq');
 
 const app  = express();
-const PORT = process.env.PORT || 3002;
+const PORT = process.env.PORT || 4200;
 
 // Cache location – mounted as a Docker named volume (type_cache)
 const CACHE_DIR  = '/app/cache';
 const CACHE_FILE = path.join(CACHE_DIR, 'types.json');
 
-const JOKE_SERVICE_URL = process.env.JOKE_SERVICE_URL || 'http://joke-service:3001';
+const JOKE_SERVICE_URL = process.env.JOKE_SERVICE_URL || 'http://joke-service:4000';
 // ─────────────────────────────────────────────────────────────────────────────
 // CORS — Allow browser requests from any origin.
 // Required when the frontend is served through Kong HTTPS and makes API calls
@@ -54,29 +54,13 @@ app.use((req, res, next) => {
 });
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+// Also serve at /submit/ prefix so that <base href="/submit/"> in index.html
+// resolves assets correctly when the page is loaded via Kong's /submit route.
+app.use('/submit', express.static(path.join(__dirname, 'public')));
 
 // ─────────────────────────────────────────────────────────────
 // Swagger / OpenAPI setup
 // ─────────────────────────────────────────────────────────────
-// Use KONG_PUBLIC_IP env var if provided, otherwise fall back to a placeholder.
-// Set KONG_PUBLIC_IP in the container's env when deploying to VM2.
-const KONG_PUBLIC_IP = process.env.KONG_PUBLIC_IP || null;
-
-const swaggerServers = [
-  { url: `http://localhost:${PORT}`, description: 'Local Docker (direct)' }
-];
-if (KONG_PUBLIC_IP) {
-  swaggerServers.push({
-    url:         `https://${KONG_PUBLIC_IP}`,
-    description: 'Kong API Gateway (HTTPS)'
-  });
-} else {
-  swaggerServers.push({
-    url:         'https://<KONG_PUBLIC_IP>',
-    description: 'Kong API Gateway – set KONG_PUBLIC_IP env var to populate'
-  });
-}
-
 const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
@@ -85,7 +69,11 @@ const swaggerOptions = {
       version:     '1.0.0',
       description: 'CO3404 Distributed Systems – Submit new jokes to the RabbitMQ queue'
     },
-    servers: swaggerServers
+    servers: [
+      { url: 'http://localhost:3200',  description: 'Local – direct (host port 3200)' },
+      { url: 'http://localhost:8000',  description: 'Local – via Kong gateway (port 8000)' },
+      { url: 'https://KONG_PUBLIC_IP', description: 'Azure – Kong gateway (replace KONG_PUBLIC_IP)' }
+    ]
   },
   apis: ['./server.js'] // source file containing @swagger annotations
 };
@@ -264,35 +252,6 @@ async function start() {
 
   // Start RabbitMQ connection in the background (non-blocking).
   // The connect() function retries automatically on failure.
-
-  // ── Event-Carried State Transfer ──────────────────────────────
-  // When ETL inserts a brand-new type, it publishes a type_update event
-  // to the 'type_updates' fanout exchange → 'sub_type_update' queue.
-  // We update the local cache file so subsequent GET /types calls
-  // reflect the new type without needing to call the Joke Service.
-  onTypeUpdate(async (event) => {
-    if (event.event !== 'type_update') return;
-    const { id, name } = event.type;
-    try {
-      let types = [];
-      try {
-        const raw = await fs.readFile(CACHE_FILE, 'utf8');
-        types = JSON.parse(raw);
-      } catch { /* cache may not exist yet — start fresh */ }
-
-      // Idempotency: only add if not already cached
-      if (!types.find(t => t.name === name)) {
-        types.push({ id, name });
-        types.sort((a, b) => a.name.localeCompare(b.name));
-        await fs.mkdir(CACHE_DIR, { recursive: true });
-        await fs.writeFile(CACHE_FILE, JSON.stringify(types));
-        console.log(`[Submit Service] 📦 Types cache updated via event: added "${name}"`);
-      }
-    } catch (err) {
-      console.error('[Submit Service] Failed to update types cache from event:', err.message);
-    }
-  });
-
   connect();
 
   app.listen(PORT, () => {

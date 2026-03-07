@@ -13,6 +13,6 @@ COPY . .
 # prevents errors if the service runs without a volume.
 RUN mkdir -p /app/cache
 
-EXPOSE 3002
+EXPOSE 4200
 
 CMD ["node", "server.js"]

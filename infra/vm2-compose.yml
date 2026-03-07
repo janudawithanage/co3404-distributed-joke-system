@@ -86,6 +86,38 @@ services:
       - vm2_network
     restart: unless-stopped
 
+  # ─────────────────────────────────────────────────────────────────
+  # Moderator Service — NEW in Option 4
+  # Sits between Submit and ETL in the pipeline.
+  # Runs on VM2 alongside RabbitMQ so it can use Docker-internal DNS
+  # "rabbitmq" to connect to the broker (no cross-VM AMQP needed).
+  #
+  # Flow:
+  #   Submit → [submit queue] → Moderator → [moderated queue] → ETL
+  #
+  # Kong proxies /moderate-ui, /moderate, /moderated, /reject here.
+  # ─────────────────────────────────────────────────────────────────
+  moderator-service:
+    build: ./moderator-service
+    container_name: jokes_moderator_service
+    environment:
+      RABBITMQ_HOST:     rabbitmq      # internal Docker DNS (same vm2_network)
+      RABBITMQ_USER:     ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      JOKE_SERVICE_URL:  ${JOKE_SERVICE_URL}   # http://10.0.1.4:3001 (VM1 private)
+      PORT:              3004
+    ports:
+      - "3004:3004"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      # Named volume for types cache — updated at startup + via ECST events.
+      - mod_type_cache:/app/cache
+    networks:
+      - vm2_network
+    restart: unless-stopped
+
 # ─────────────────────────────────────────────────────────────────
 # Named volumes
 # ─────────────────────────────────────────────────────────────────
@@ -93,6 +125,8 @@ volumes:
   rabbitmq_data:
     driver: local
   type_cache:
+    driver: local
+  mod_type_cache:
     driver: local
 
 networks:

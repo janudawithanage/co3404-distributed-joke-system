@@ -116,17 +116,25 @@ services:
         strip_path:     false
         preserve_host:  false
         methods:        [GET]
+# Exposes the Swagger UI at /docs through Kong HTTPS
+      # Demonstrates OpenAPI/Swagger compliance requirement
+      - name:           submit-docs-route
+        paths:          [/docs]
+        strip_path:     false
+        preserve_host:  false
+        methods:        [GET]
+
   # ---------------------------------------------------------------------------
-  # Moderator Service — VM2 (${vm2_private_ip}:3004)
+  # Moderator Service -- VM2 (${vm2_private_ip}:3004)
   #
   # Sits between the Submit and ETL services in the Option 4 pipeline.
   # Human moderators review pending jokes before they reach the database.
   #
   # Routes:
-  #   GET  /moderate-ui  (strip_path=true)  → serves the moderator HTML UI
-  #   GET  /moderate                        → pull next pending joke from queue
-  #   POST /moderated                       → approve joke (ack + forward to ETL)
-  #   POST /reject                          → reject joke (nack, discard)
+  #   GET  /moderate-ui  (strip_path=true)  -> serves the moderator HTML UI
+  #   GET  /moderate                        -> pull next pending joke from queue
+  #   POST /moderated                       -> approve joke (ack + forward to ETL)
+  #   POST /reject                          -> reject joke (nack, discard)
   #
   # read_timeout raised to 30 s because GET /moderate does a manual-ACK
   # channel.get() which may block briefly waiting for a message.

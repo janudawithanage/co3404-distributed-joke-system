@@ -58,6 +58,25 @@ app.use(express.static(path.join(__dirname, 'public')));
 // ─────────────────────────────────────────────────────────────
 // Swagger / OpenAPI setup
 // ─────────────────────────────────────────────────────────────
+// Use KONG_PUBLIC_IP env var if provided, otherwise fall back to a placeholder.
+// Set KONG_PUBLIC_IP in the container's env when deploying to VM2.
+const KONG_PUBLIC_IP = process.env.KONG_PUBLIC_IP || null;
+
+const swaggerServers = [
+  { url: `http://localhost:${PORT}`, description: 'Local Docker (direct)' }
+];
+if (KONG_PUBLIC_IP) {
+  swaggerServers.push({
+    url:         `https://${KONG_PUBLIC_IP}`,
+    description: 'Kong API Gateway (HTTPS)'
+  });
+} else {
+  swaggerServers.push({
+    url:         'https://<KONG_PUBLIC_IP>',
+    description: 'Kong API Gateway – set KONG_PUBLIC_IP env var to populate'
+  });
+}
+
 const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
@@ -66,10 +85,7 @@ const swaggerOptions = {
       version:     '1.0.0',
       description: 'CO3404 Distributed Systems – Submit new jokes to the RabbitMQ queue'
     },
-    servers: [
-      { url: `http://localhost:${PORT}`, description: 'Local Docker' },
-      { url: 'https://KONG_PUBLIC_IP',   description: 'Kong API Gateway (replace KONG_PUBLIC_IP)' }
-    ]
+    servers: swaggerServers
   },
   apis: ['./server.js'] // source file containing @swagger annotations
 };

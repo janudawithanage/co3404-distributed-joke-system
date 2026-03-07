@@ -92,6 +92,12 @@ services:
     networks:
       - jokes_network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 15s
+      timeout:  5s
+      retries:  5
+      start_period: 20s
 
   # ───────────────────────────────────────────────────────
   # Submit Service – Accepts jokes, publishes to RabbitMQ
@@ -151,6 +157,12 @@ services:
     networks:
       - jokes_network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3003/health"]
+      interval: 15s
+      timeout:  5s
+      retries:  5
+      start_period: 20s
 
   # ───────────────────────────────────────────────────────
   # Moderator Service — NEW in Option 4

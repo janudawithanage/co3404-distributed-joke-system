@@ -29,7 +29,7 @@ const fs           = require('fs').promises;
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi    = require('swagger-ui-express');
 
-const { connect, publishJoke } = require('./rabbitmq');
+const { connect, publishJoke, onTypeUpdate } = require('./rabbitmq');
 
 const app  = express();
 const PORT = process.env.PORT || 3002;
@@ -248,6 +248,35 @@ async function start() {
 
   // Start RabbitMQ connection in the background (non-blocking).
   // The connect() function retries automatically on failure.
+
+  // ── Event-Carried State Transfer ──────────────────────────────
+  // When ETL inserts a brand-new type, it publishes a type_update event
+  // to the 'type_updates' fanout exchange → 'sub_type_update' queue.
+  // We update the local cache file so subsequent GET /types calls
+  // reflect the new type without needing to call the Joke Service.
+  onTypeUpdate(async (event) => {
+    if (event.event !== 'type_update') return;
+    const { id, name } = event.type;
+    try {
+      let types = [];
+      try {
+        const raw = await fs.readFile(CACHE_FILE, 'utf8');
+        types = JSON.parse(raw);
+      } catch { /* cache may not exist yet — start fresh */ }
+
+      // Idempotency: only add if not already cached
+      if (!types.find(t => t.name === name)) {
+        types.push({ id, name });
+        types.sort((a, b) => a.name.localeCompare(b.name));
+        await fs.mkdir(CACHE_DIR, { recursive: true });
+        await fs.writeFile(CACHE_FILE, JSON.stringify(types));
+        console.log(`[Submit Service] 📦 Types cache updated via event: added "${name}"`);
+      }
+    } catch (err) {
+      console.error('[Submit Service] Failed to update types cache from event:', err.message);
+    }
+  });
+
   connect();
 
   app.listen(PORT, () => {

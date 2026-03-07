@@ -1,11 +1,8 @@
 # =============================================================================
-# infra/terraform/kong.yml.tpl
+# infra/kong/kong.yml
 #
-# Terraform templatefile() source for Kong declarative configuration.
-# Variables: vm1_private_ip, vm2_private_ip, rate_limit_per_minute
-#
-# Rendered to infra/kong/kong.yml by the local_file resource in main.tf.
-# Do NOT edit infra/kong/kong.yml directly — edit this template instead.
+# Kong declarative configuration (DB-less mode).
+# Deployed to VM3 (kong-vm) at: /opt/kong/kong.yml
 # =============================================================================
 
 _format_version: "3.0"
@@ -16,8 +13,6 @@ _transform: true
 # Applied to every request that passes through Kong, regardless of route.
 # =============================================================================
 plugins:
-  # Adds a unique Kong-Request-ID header to every response.
-  # Use this to prove traffic is flowing through Kong in testing.
   - name: correlation-id
     config:
       header_name:      Kong-Request-ID
@@ -30,24 +25,22 @@ plugins:
 services:
 
   # ---------------------------------------------------------------------------
-  # Joke Service — VM1 (${vm1_private_ip}:3001)
+  # Joke Service — VM1 (10.0.1.4:3001)
   #
-  # Route 1: /joke   (prefix, strip_path=false)  → API endpoints
+  # Route 1: /joke   (strip_path=false)  → API endpoints
   #   Kong receives:   GET /joke/programming
-  #   Forwards to:     GET http://${vm1_private_ip}:3001/joke/programming
+  #   Forwards to:     GET http://10.0.1.4:3001/joke/programming
   #
-  # Route 2: /types  (strip_path=false)           → joke type list
-  #
-  # Route 3: /joke-ui (strip_path=true)           → Joke Machine frontend HTML
+  # Route 2: /joke-ui (strip_path=true)  → Joke Machine frontend HTML
   #   Kong receives:   GET /joke-ui
-  #   Forwards to:     GET http://${vm1_private_ip}:3001/
+  #   Forwards to:     GET http://10.0.1.4:3001/
   #
-  # Rate limiting: ${rate_limit_per_minute} requests/minute per client IP.
+  # Rate limiting: 5 requests/minute per client IP.
   # Demonstrating that a downstream service can be protected by Kong
   # without modifying the service itself.
   # ---------------------------------------------------------------------------
   - name: joke-service
-    url:              http://${vm1_private_ip}:3001
+    url:              http://10.0.1.4:3001
     connect_timeout:  5000
     read_timeout:     10000
     write_timeout:    10000
@@ -70,14 +63,14 @@ services:
     plugins:
       - name: rate-limiting
         config:
-          minute:         ${rate_limit_per_minute}
+          minute:         5
           policy:         local          # "local" = per Kong node, fine for single-VM demo
           error_code:     429
-          error_message:  "Rate limit exceeded — Joke API allows ${rate_limit_per_minute} req/min. Retry after 60 seconds."
+          error_message:  "Rate limit exceeded — Joke API allows 5 req/min. Retry after 60 seconds."
           hide_client_headers: false    # expose X-RateLimit-Remaining-Minute header
 
   # ---------------------------------------------------------------------------
-  # Submit Service — VM2 (${vm2_private_ip}:3002)
+  # Submit Service — VM2 (10.0.1.5:3002)
   #
   # Two routes are needed:
   #   1. GET  /submit  (strip_path=true)  → / on VM2  → serves the HTML frontend
@@ -89,7 +82,7 @@ services:
   # No rate limiting on submit — demonstrates per-service plugin configuration.
   # ---------------------------------------------------------------------------
   - name: submit-service
-    url:              http://${vm2_private_ip}:3002
+    url:              http://10.0.1.5:3002
     connect_timeout:  5000
     read_timeout:     10000
     write_timeout:    10000
@@ -117,48 +110,49 @@ services:
         preserve_host:  false
         methods:        [GET]
   # ---------------------------------------------------------------------------
-  # Moderator Service — VM2 (${vm2_private_ip}:3004)
-  #
-  # Sits between the Submit and ETL services in the Option 4 pipeline.
-  # Human moderators review pending jokes before they reach the database.
+  # Moderator Service — NEW in Option 4
+  # VM2 (10.0.1.5:3004) — update the IP if moderator runs on a separate VM.
   #
   # Routes:
-  #   GET  /moderate-ui  (strip_path=true)  → serves the moderator HTML UI
-  #   GET  /moderate                        → pull next pending joke from queue
-  #   POST /moderated                       → approve joke (ack + forward to ETL)
-  #   POST /reject                          → reject joke (nack, discard)
+  #   GET  /moderate-ui   → / on moderator (strip_path=true)  → HTML frontend
+  #   GET  /moderate      → /moderate (strip_path=false)       → poll queue API
+  #   POST /moderated     → /moderated (strip_path=false)      → approve API
+  #   POST /reject        → /reject (strip_path=false)         → reject API
   #
-  # read_timeout raised to 30 s because GET /moderate does a manual-ACK
-  # channel.get() which may block briefly waiting for a message.
+  # read_timeout is 30 s to accommodate long-poll behaviour.
   # ---------------------------------------------------------------------------
   - name: moderator-service
-    url:              http://${vm2_private_ip}:3004
+    url:              http://10.0.1.5:3004
     connect_timeout:  5000
     read_timeout:     30000
     write_timeout:    10000
-    retries:          2
+    retries:          3
 
     routes:
-      - name:           moderate-ui-route
+      # Serves the moderator HTML frontend at /moderate-ui through Kong
+      - name:           moderator-frontend-route
         paths:          [/moderate-ui]
         strip_path:     true
         preserve_host:  false
         methods:        [GET, OPTIONS]
 
-      - name:           moderate-get-route
+      # Moderator polls this to fetch the next joke for review
+      - name:           moderator-get-route
         paths:          [/moderate]
         strip_path:     false
         preserve_host:  false
-        methods:        [GET]
+        methods:        [GET, OPTIONS]
 
-      - name:           moderated-post-route
+      # Moderator posts approved joke to the moderated queue
+      - name:           moderator-post-route
         paths:          [/moderated]
         strip_path:     false
         preserve_host:  false
-        methods:        [POST]
+        methods:        [POST, OPTIONS]
 
-      - name:           reject-post-route
+      # Moderator rejects and discards a joke
+      - name:           moderator-reject-route
         paths:          [/reject]
         strip_path:     false
         preserve_host:  false
-        methods:        [POST]
+        methods:        [POST, OPTIONS]

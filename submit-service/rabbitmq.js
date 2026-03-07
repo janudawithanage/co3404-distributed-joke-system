@@ -20,10 +20,16 @@
 
 const amqp = require('amqplib');
 
-const QUEUE_NAME = 'jokes_queue';
+// Option 3: published to 'jokes_queue' (direct to ETL).
+// Option 4: publishes to 'submit'; Moderator consumes and forwards to 'moderated'.
+const QUEUE_NAME        = 'submit';
+const TYPE_UPDATE_QUEUE = 'sub_type_update';
+const TYPE_UPDATE_EXCH  = 'type_updates'; // fanout exchange (ETL publishes here)
 
-let channel     = null;
-let connection  = null;
+let typeUpdateCallback = null; // called with each type_update event
+
+let channel      = null;
+let connection   = null;
 let isConnecting = false; // guard against parallel reconnect loops
 
 function getRabbitMQUrl() {
@@ -44,7 +50,29 @@ async function connect() {
 
     // durable: true – queue survives a broker restart
     await channel.assertQueue(QUEUE_NAME, { durable: true });
-    console.log(`[RabbitMQ] Connected. Queue "${QUEUE_NAME}" asserted.`);
+
+    // ── Event-Carried State Transfer setup ─────────────────────
+    // Assert the fanout exchange (idempotent — safe to call repeatedly).
+    // Bind a durable queue so type_update events survive broker restarts.
+    await channel.assertExchange(TYPE_UPDATE_EXCH, 'fanout', { durable: true });
+    await channel.assertQueue(TYPE_UPDATE_QUEUE, { durable: true });
+    await channel.bindQueue(TYPE_UPDATE_QUEUE, TYPE_UPDATE_EXCH, '');
+
+    // Consume type_update events → update the local types cache
+    channel.consume(TYPE_UPDATE_QUEUE, (msg) => {
+      if (!msg) return;
+      try {
+        const event = JSON.parse(msg.content.toString());
+        console.log('[Submit RabbitMQ] type_update event received:', event);
+        if (typeUpdateCallback) typeUpdateCallback(event);
+        channel.ack(msg);
+      } catch (err) {
+        console.error('[Submit RabbitMQ] Malformed type_update — discarding:', err.message);
+        channel.nack(msg, false, false);
+      }
+    });
+
+    console.log(`[Submit RabbitMQ] Connected. Queue "${QUEUE_NAME}" asserted.`);
     isConnecting = false;
 
     // ── Handle unexpected disconnection ──────────────────
@@ -92,4 +120,9 @@ async function publishJoke(jokeData) {
   console.log(`[RabbitMQ] Published to "${QUEUE_NAME}":`, jokeData);
 }
 
-module.exports = { connect, publishJoke };
+/** Register callback for type_update events (Event-Carried State Transfer) */
+function onTypeUpdate(callback) {
+  typeUpdateCallback = callback;
+}
+
+module.exports = { connect, publishJoke, onTypeUpdate };

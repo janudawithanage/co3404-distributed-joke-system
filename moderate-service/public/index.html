@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CO3404 – Joke Moderator</title>
+  <style>
+    :root {
+      --bg:           #0f172a;
+      --surface:      #1e293b;
+      --surface2:     #334155;
+      --accent:       #f59e0b;
+      --accent-hover: #d97706;
+      --approve:      #10b981;
+      --approve-h:    #059669;
+      --reject:       #ef4444;
+      --reject-h:     #dc2626;
+      --text:         #f1f5f9;
+      --muted:        #94a3b8;
+      --radius:       12px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color:      var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      display:    flex;
+      flex-direction: column;
+      align-items:    center;
+      padding:    2rem 1rem;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 2.5rem;
+      width: 100%;
+      max-width: 600px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .header-left h1 { font-size: 1.9rem; color: var(--accent); }
+    .header-left p  { color: var(--muted); font-size: 0.85rem; margin-top: 0.3rem; }
+
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 0.5rem 1rem;
+    }
+    .user-info img { width: 32px; height: 32px; border-radius: 50%; }
+    .user-info span { font-size: 0.85rem; color: var(--muted); }
+    .logout-btn {
+      font-size: 0.75rem;
+      color: var(--reject);
+      background: none;
+      border: 1px solid var(--reject);
+      border-radius: 6px;
+      padding: 0.2rem 0.6rem;
+      cursor: pointer;
+    }
+    .logout-btn:hover { background: var(--reject); color: white; }
+
+    /* ── Status Banner ─────────────────────────────────────────── */
+    #status-banner {
+      width: 100%;
+      max-width: 600px;
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 1.5rem 2rem;
+      text-align: center;
+      color: var(--muted);
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+    }
+    .spinner {
+      width: 20px; height: 20px;
+      border: 3px solid var(--surface2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Moderation Card ───────────────────────────────────────── */
+    .mod-card {
+      background:     var(--surface);
+      border-radius:  var(--radius);
+      padding:        2rem;
+      width:          100%;
+      max-width:      600px;
+      display:        flex;
+      flex-direction: column;
+      gap:            1.3rem;
+      display: none;
+    }
+    .mod-card.visible { display: flex; }
+
+    .field-group { display: flex; flex-direction: column; gap: 0.4rem; }
+    .field-group label {
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    textarea, input[type="text"], select {
+      background:    var(--surface2);
+      border:        1px solid #475569;
+      color:         var(--text);
+      border-radius: 8px;
+      padding:       0.65rem 0.9rem;
+      font-size:     0.95rem;
+      width:         100%;
+      resize:        vertical;
+      font-family:   inherit;
+    }
+    textarea:focus, input:focus, select:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(245,158,11,0.15);
+    }
+    textarea { min-height: 80px; }
+
+    select option { background: var(--surface2); }
+
+    /* ── Action Buttons ────────────────────────────────────────── */
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-top: 0.5rem;
+    }
+
+    button {
+      padding:       0.75rem 1.5rem;
+      border:        none;
+      border-radius: 8px;
+      font-size:     1rem;
+      font-weight:   600;
+      cursor:        pointer;
+      transition:    background 0.2s, transform 0.1s;
+    }
+    button:active { transform: scale(0.97); }
+
+    .btn-approve {
+      background: var(--approve);
+      color: white;
+    }
+    .btn-approve:hover { background: var(--approve-h); }
+    .btn-approve:disabled { background: #475569; cursor: not-allowed; }
+
+    .btn-reject {
+      background: var(--reject);
+      color: white;
+    }
+    .btn-reject:hover  { background: var(--reject-h); }
+    .btn-reject:disabled { background: #475569; cursor: not-allowed; }
+
+    /* ── Toast ─────────────────────────────────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: 1.5rem;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: var(--surface2);
+      color: var(--text);
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      transition: transform 0.3s ease;
+      z-index: 999;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); }
+    #toast.success { border-left: 4px solid var(--approve); }
+    #toast.error   { border-left: 4px solid var(--reject); }
+
+    /* ── Queue Counter ─────────────────────────────────────────── */
+    .queue-info {
+      font-size: 0.8rem;
+      color: var(--muted);
+      text-align: right;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="header-left">
+      <h1>⚖️ Joke Moderator</h1>
+      <p>CO3404 – Distributed Systems Option 4</p>
+    </div>
+    <div class="user-info" id="user-info" style="display:none;">
+      <img id="user-avatar" src="" alt="avatar" />
+      <span id="user-name"></span>
+      <button class="logout-btn" onclick="location.href='/logout'">Logout</button>
+    </div>
+  </header>
+
+  <!-- Polling status banner -->
+  <div id="status-banner">
+    <div class="spinner"></div>
+    <span id="status-text">Connecting to moderation queue…</span>
+  </div>
+
+  <!-- Moderation form card -->
+  <div class="mod-card" id="mod-card">
+    <div class="queue-info">Review and edit the joke before approving.</div>
+
+    <div class="field-group">
+      <label>Setup (Question)</label>
+      <textarea id="setup" rows="2" placeholder="Enter the joke setup…"></textarea>
+    </div>
+
+    <div class="field-group">
+      <label>Punchline (Answer)</label>
+      <textarea id="punchline" rows="2" placeholder="Enter the punchline…"></textarea>
+    </div>
+
+    <div class="field-group">
+      <label>Joke Type</label>
+      <select id="type">
+        <option value="">— select type —</option>
+      </select>
+    </div>
+
+    <div class="actions">
+      <button class="btn-approve" id="btn-approve" onclick="approveJoke()">
+        ✅ Approve
+      </button>
+      <button class="btn-reject" id="btn-reject" onclick="rejectJoke()">
+        ❌ Reject
+      </button>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

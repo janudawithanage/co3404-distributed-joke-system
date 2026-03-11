@@ -1,10 +1,20 @@
 node_modules/
 .env
 *.log
+
+# ── LaTeX build artefacts (keep .tex and .pdf, exclude temp files) ───────────
+report/*.aux
+report/*.toc
+report/*.out
+# Keep .tex source and compiled .pdf
+!report/*.tex
+!report/*.pdf
+!report/*.md
 # Keep example files — they are safe to commit (no real secrets)
 !.env.example
 !infra/.env.vm1.example
 !infra/.env.vm2.example
+!infra/.env.vm3.example
 
 # ── Terraform ────────────────────────────────────────────────────────────────
 infra/terraform/.terraform/
@@ -26,6 +36,7 @@ infra/kong/certs/*.pem
 # Keep the certs directory itself in git
 !infra/kong/certs/.gitkeep
 
-# ── Phase 2 env files with real IPs ──────────────────────────────────────────
+# ── Phase 2/3 env files with real IPs/secrets ───────────────────────────────
 infra/.env.vm1
 infra/.env.vm2
+infra/.env.vm3

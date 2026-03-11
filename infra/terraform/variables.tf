@@ -1,6 +1,6 @@
 # =============================================================================
 # infra/terraform/variables.tf
-# Input variables for the Kong API Gateway deployment (Phase 3)
+# Input variables for Kong API Gateway (VM4) + Moderate Service (VM3)
 # =============================================================================
 
 # ── Azure identity ────────────────────────────────────────────────────────────
@@ -84,6 +84,44 @@ variable "vm2_private_ip" {
   description = "Private IP of VM2 running submit-service + RabbitMQ (usually 10.0.1.5)"
   type        = string
   default     = "10.0.1.5"
+}
+
+variable "vm3_private_ip" {
+  description = "Private IP of VM3 running moderate-service. Must be 10.0.1.7 because Kong VM was dynamically assigned 10.0.1.6."
+  type        = string
+  default     = "10.0.1.7"
+}
+
+# -- Auth0 (needed by moderate-service on VM3) ---------------------------------
+
+variable "auth0_secret" {
+  description = "Long random string used to encrypt Auth0 session cookies (32+ chars)"
+  type        = string
+  sensitive   = true
+}
+
+variable "auth0_client_id" {
+  description = "Auth0 Regular Web Application Client ID"
+  type        = string
+}
+
+variable "auth0_client_secret" {
+  description = "Auth0 Regular Web Application Client Secret"
+  type        = string
+  sensitive   = true
+}
+
+variable "auth0_issuer_base_url" {
+  description = "Auth0 tenant URL, e.g. https://your-tenant.auth0.com"
+  type        = string
+}
+
+# -- Docker image for moderate-service -----------------------------------------
+
+variable "moderate_docker_image" {
+  description = "Docker Hub image for moderate-service, e.g. youruser/moderate-service:latest"
+  type        = string
+  default     = "moderate-service:latest"
 }
 
 # ── Kong configuration ────────────────────────────────────────────────────────

@@ -1,30 +1,33 @@
 /**
  * submit-service/server.js
  *
- * Submit Microservice
- * ───────────────────
+ * Submit Microservice — Option 4
+ * ───────────────────────────────
  * Responsibilities:
- *   - POST /submit   – validate and publish joke to RabbitMQ
- *   - GET  /types    – proxy Joke Service; cache result for resilience
- *   - GET  /docs     – Swagger UI for interactive API documentation
+ *   - POST /submit   – validate and publish joke to "submit" RabbitMQ queue
+ *   - GET  /types    – return types from ECST cache (no HTTP call to joke-service)
+ *   - GET  /docs     – Swagger UI
  *   - GET  /health   – health check
  *   - Serve static frontend (public/)
  *
  * Distributed Systems Design:
- *   Submit → RabbitMQ → ETL → MySQL
+ *   Submit → RabbitMQ "submit" queue → moderate-service → "moderated" queue → ETL → DB
  *
- *   Submit never writes to MySQL directly.
- *   This decoupling means:
- *     • Submit works even if the DB is down
- *     • If ETL is down, messages queue up (at-least-once delivery)
- *     • If Joke service is down, /types falls back to a local cache
+ *   Submit never writes to the database directly.
+ *   If RabbitMQ is down, messages cannot be sent (503).
+ *   If the moderator service is down, messages queue up (at-least-once delivery).
+ *
+ * ECST Types Cache:
+ *   Types are kept up to date via the "sub_type_update" RabbitMQ queue.
+ *   ETL publishes to the "type_update" fanout exchange after creating a new type.
+ *   This service updates its local types.json instead of calling joke-service HTTP.
+ *   This means GET /types works even when joke-service and ETL are both offline.
  */
 
 'use strict';
 
 const express      = require('express');
 const path         = require('path');
-const axios        = require('axios');
 const fs           = require('fs').promises;
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi    = require('swagger-ui-express');
@@ -34,16 +37,11 @@ const { connect, publishJoke } = require('./rabbitmq');
 const app  = express();
 const PORT = process.env.PORT || 4200;
 
-// Cache location – mounted as a Docker named volume (type_cache)
 const CACHE_DIR  = '/app/cache';
 const CACHE_FILE = path.join(CACHE_DIR, 'types.json');
 
-const JOKE_SERVICE_URL = process.env.JOKE_SERVICE_URL || 'http://joke-service:4000';
 // ─────────────────────────────────────────────────────────────────────────────
-// CORS — Allow browser requests from any origin.
-// Required when the frontend is served through Kong HTTPS and makes API calls
-// back through the same Kong origin (relative paths). Defence-in-depth for
-// direct VM access during testing.
+// CORS
 // ─────────────────────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -54,46 +52,41 @@ app.use((req, res, next) => {
 });
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
-// Also serve at /submit/ prefix so that <base href="/submit/"> in index.html
-// resolves assets correctly when the page is loaded via Kong's /submit route.
 app.use('/submit', express.static(path.join(__dirname, 'public')));
 
-// ─────────────────────────────────────────────────────────────
-// Swagger / OpenAPI setup
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Swagger / OpenAPI
+// ─────────────────────────────────────────────────────────────────────────────
 const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
     info: {
       title:       'Submit Service API',
-      version:     '1.0.0',
-      description: 'CO3404 Distributed Systems – Submit new jokes to the RabbitMQ queue'
+      version:     '2.0.0',
+      description: 'CO3404 Distributed Systems Option 4 – Submit jokes to moderation queue'
     },
     servers: [
-      { url: 'http://localhost:3200',  description: 'Local – direct (host port 3200)' },
-      { url: 'http://localhost:8000',  description: 'Local – via Kong gateway (port 8000)' },
-      { url: 'https://KONG_PUBLIC_IP', description: 'Azure – Kong gateway (replace KONG_PUBLIC_IP)' }
+      { url: 'http://localhost:3200',  description: 'Local – direct' },
+      { url: 'http://localhost:8000',  description: 'Local – Kong' },
+      { url: 'https://KONG_PUBLIC_IP', description: 'Azure – Kong (replace IP)' }
     ]
   },
-  apis: ['./server.js'] // source file containing @swagger annotations
+  apis: ['./server.js']
 };
-
 const swaggerSpec = swaggerJsdoc(swaggerOptions);
 app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // POST /submit
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 /**
  * @swagger
  * /submit:
  *   post:
- *     summary: Submit a new joke
+ *     summary: Submit a new joke for moderation
  *     description: >
- *       Publishes the joke as a JSON message to the RabbitMQ
- *       "jokes_queue". The ETL service consumes the queue and
- *       persists the joke to MySQL. This endpoint does NOT
- *       write to the database directly (decoupled architecture).
+ *       Publishes the joke to the RabbitMQ "submit" queue.
+ *       The moderate-service picks it up for human review before ETL writes to DB.
  *     requestBody:
  *       required: true
  *       content:
@@ -102,29 +95,13 @@ app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
  *             type: object
  *             required: [setup, punchline, type]
  *             properties:
- *               setup:
- *                 type: string
- *                 example: "Why do programmers wear glasses?"
- *               punchline:
- *                 type: string
- *                 example: "Because they can't C#!"
- *               type:
- *                 type: string
- *                 example: "programming"
+ *               setup:     { type: string }
+ *               punchline: { type: string }
+ *               type:      { type: string }
  *     responses:
- *       202:
- *         description: Joke accepted and queued for processing
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message: { type: string }
- *                 queued:  { type: object }
- *       400:
- *         description: Missing required fields
- *       503:
- *         description: RabbitMQ unavailable
+ *       202: { description: Joke queued for moderation }
+ *       400: { description: Missing required fields }
+ *       503: { description: RabbitMQ unavailable }
  */
 app.post('/submit', async (req, res) => {
   const { setup, punchline, type } = req.body;
@@ -136,15 +113,16 @@ app.post('/submit', async (req, res) => {
   }
 
   const jokeData = {
-    setup:     setup.trim(),
-    punchline: punchline.trim(),
-    type:      type.trim().toLowerCase()
+    setup:       setup.trim(),
+    punchline:   punchline.trim(),
+    type:        type.trim().toLowerCase(),
+    submittedAt: new Date().toISOString()
   };
 
   try {
     await publishJoke(jokeData);
     res.status(202).json({
-      message: 'Joke queued for processing by the ETL service',
+      message: 'Joke queued for human moderation',
       queued:  jokeData
     });
   } catch (err) {
@@ -156,70 +134,30 @@ app.post('/submit', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// GET /types  (resilient proxy + cache)
+// GET /types  — ECST cache-only
 //
-// Distributed Systems Note:
-//   This implements a simplified cache-aside pattern:
-//     1. Request fresh data from Joke Service
-//     2. Write to local cache file (Docker volume)
-//     3. On failure, read from cache file
-//
-//   The cache file lives on a named Docker volume so it
-//   persists across container restarts. This means Submit
-//   can return joke types even when Joke Service is stopped.
+// Returns types from the local cache file which is kept current
+// by the ECST type_update events from the ETL service.
+// No HTTP call to joke-service — fully decoupled.
+// Returns [] if cache is not yet populated (service cold start).
 // ─────────────────────────────────────────────────────────────
 /**
  * @swagger
  * /types:
  *   get:
- *     summary: Get all joke types
- *     description: >
- *       Fetches types from the Joke Service and caches them locally.
- *       Returns cached data if the Joke Service is unreachable.
+ *     summary: Get all joke types (from local ECST cache)
  *     responses:
  *       200:
  *         description: Array of joke type objects
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 type: object
- *                 properties:
- *                   id:   { type: integer }
- *                   name: { type: string }
- *       503:
- *         description: Joke Service down and no cache available
  */
-app.get('/types', async (req, res) => {
+app.get('/types', async (_req, res) => {
   try {
-    // Try the Joke Service first (3 s timeout to fail fast)
-    const response = await axios.get(`${JOKE_SERVICE_URL}/types`, {
-      timeout: 3000
-    });
-    const types = response.data;
-
-    // Update the cache file for future fallback use
-    await fs.mkdir(CACHE_DIR, { recursive: true });
-    await fs.writeFile(CACHE_FILE, JSON.stringify(types));
-    console.log('[Submit Service] Types fetched live and cache updated');
-
+    const raw   = await fs.readFile(CACHE_FILE, 'utf8');
+    const types = JSON.parse(raw);
     res.json(types);
-
-  } catch (err) {
-    // Joke Service unreachable – fall back to cache
-    console.warn('[Submit Service] Joke Service unavailable – reading from cache');
-    try {
-      const raw   = await fs.readFile(CACHE_FILE, 'utf8');
-      const types = JSON.parse(raw);
-      res.json(types);
-      console.log('[Submit Service] Returned types from cache');
-    } catch (cacheErr) {
-      res.status(503).json({
-        error:  'Joke Service unavailable and no cache found',
-        hint:   'Start the Joke Service and call GET /types once to prime the cache'
-      });
-    }
+  } catch (_err) {
+    // Cache not yet populated — return empty array; types will arrive via ECST
+    res.json([]);
   }
 });
 
@@ -232,8 +170,7 @@ app.get('/types', async (req, res) => {
  *   get:
  *     summary: Health check
  *     responses:
- *       200:
- *         description: Service is healthy
+ *       200: { description: Service is healthy }
  */
 app.get('/health', (_req, res) => {
   res.json({
@@ -247,13 +184,8 @@ app.get('/health', (_req, res) => {
 // Startup
 // ─────────────────────────────────────────────────────────────
 async function start() {
-  // Ensure the cache directory exists before anything tries to use it
   await fs.mkdir(CACHE_DIR, { recursive: true });
-
-  // Start RabbitMQ connection in the background (non-blocking).
-  // The connect() function retries automatically on failure.
   connect();
-
   app.listen(PORT, () => {
     console.log(`[Submit Service] Listening on http://localhost:${PORT}`);
     console.log(`[Submit Service] Swagger UI at  http://localhost:${PORT}/docs`);

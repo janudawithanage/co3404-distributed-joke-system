@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # infra/vm3-setup.sh
-# Bootstrap Docker on VM3 (kong-vm, Ubuntu 22.04 LTS)
+# Bootstrap Docker on VM3 (moderate-vm, Ubuntu 22.04 LTS)
 #
 # ALTERNATIVE to Terraform provisioners — use this for manual setup or
 # if you need to re-install Docker without re-running `terraform apply`.
@@ -14,7 +14,7 @@
 set -euo pipefail
 
 echo "========================================"
-echo " VM3 (Kong) Bootstrap — $(date)"
+echo " VM3 (Moderate) Bootstrap — $(date)"
 echo "========================================"
 
 # ── 1. System update ──────────────────────────────────────────────────────────
@@ -57,8 +57,8 @@ sudo usermod -aG docker azureuser
 sudo systemctl enable docker
 sudo systemctl start docker
 
-# Create Kong working directory
-mkdir -p /home/azureuser/kong/certs
+# Create moderate-service working directory
+mkdir -p /home/azureuser/moderate
 
 echo ""
 echo "========================================"
@@ -67,7 +67,7 @@ echo " Docker version: $(sudo docker --version)"
 echo " Docker Compose: $(sudo docker compose version)"
 echo ""
 echo " Next steps:"
-echo "   1. Upload kong files:  scp infra/kong/docker-compose.yml ... "
-echo "   2. Generate TLS cert:  see PHASE3.md Step 3"
-echo "   3. Start Kong:         cd ~/kong && docker compose up -d"
+echo "   1. Upload compose file:  scp infra/vm3-compose.yml azureuser@<VM3_IP>:~/moderate/docker-compose.yml"
+echo "   2. Upload .env file:     scp infra/.env.vm3   azureuser@<VM3_IP>:~/moderate/.env"
+echo "   3. Start service:        ssh azureuser@<VM3_IP> 'cd ~/moderate && docker compose up -d'"
 echo "========================================"

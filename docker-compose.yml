@@ -1,25 +1,27 @@
 # =====================================================
 # CO3404 Distributed Systems – docker-compose.yml
-# Phase 1: Local Development
+# Option 4: Local Development
 #
 # Architecture:
-#   Submit Service → RabbitMQ → ETL Service → MySQL
-#   Joke Service  ← ─────────────────────── MySQL
+#   Submit Service → RabbitMQ "submit" queue
+#       → Moderate Service (human review)
+#           → RabbitMQ "moderated" queue
+#               → ETL Service → MySQL or MongoDB
+#   Joke Service  ← MySQL or MongoDB
 #
-# All services communicate via the Docker bridge network
-# "jokes_network" using container name DNS resolution
-# (e.g., "mysql", "rabbitmq", "joke-service").
-# =====================================================
-
-# =====================================================
-# Services
+# Database selection: set DB_TYPE=mysql (default) or DB_TYPE=mongo
+# Both containers are defined; only the active one is used.
+#
+# ECST type_update flow:
+#   ETL → "type_update" fanout exchange
+#       → "sub_type_update" (submit-service cache update)
+#       → "mod_type_update" (moderate-service cache update)
 # =====================================================
 
 services:
 
   # ───────────────────────────────────────────────────────
-  # MySQL 8 – Persistent relational database
-  # Init SQL runs automatically on first container creation
+  # MySQL 8 – used when DB_TYPE=mysql (default)
   # ───────────────────────────────────────────────────────
   mysql:
     image: mysql:8.0
@@ -30,14 +32,15 @@ services:
       MYSQL_USER:          ${DB_USER}
       MYSQL_PASSWORD:      ${DB_PASSWORD}
     volumes:
-      # Named volume: MySQL data survives container restarts/rebuilds
       - mysql_data:/var/lib/mysql
-      # Seed script: executed once on first container start
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
       - "3306:3306"
     networks:
       - jokes_network
+    profiles:
+      - mysql
+      - default
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost",
              "-u", "root", "--password=${DB_ROOT_PASSWORD}"]
@@ -47,9 +50,33 @@ services:
       start_period: 30s
 
   # ───────────────────────────────────────────────────────
-  # RabbitMQ 3.12 – Message broker for async communication
-  # Enables decoupling: Submit → queue → ETL
-  # Management UI: http://localhost:15672 (guest/guest)
+  # MongoDB 7 – used when DB_TYPE=mongo
+  # ───────────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7.0
+    container_name: jokes_mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-mongopassword}
+      MONGO_INITDB_DATABASE:      ${DB_NAME:-jokesdb}
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+    networks:
+      - jokes_network
+    profiles:
+      - mongo
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout:  5s
+      retries:  10
+      start_period: 30s
+
+  # ───────────────────────────────────────────────────────
+  # RabbitMQ 3.12 – Message broker
+  # Management UI: http://localhost:15672
   # ───────────────────────────────────────────────────────
   rabbitmq:
     image: rabbitmq:3.12-management
@@ -58,11 +85,10 @@ services:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     volumes:
-      # Named volume: queued messages survive RabbitMQ restarts
       - rabbitmq_data:/var/lib/rabbitmq
     ports:
-      - "5672:5672"    # AMQP protocol
-      - "15672:15672"  # Management web UI
+      - "5672:5672"
+      - "15672:15672"
     networks:
       - jokes_network
     healthcheck:
@@ -73,43 +99,45 @@ services:
       start_period: 30s
 
   # ───────────────────────────────────────────────────────
-  # Joke Service – Reads jokes from MySQL, serves frontend
-  # Frontend:  http://localhost:3001
-  # Health:    http://localhost:3001/health
+  # Joke Service – Reads jokes from DB, serves frontend
+  # Frontend:  http://localhost:3000
   # ───────────────────────────────────────────────────────
   joke-service:
     build: ./joke-service
     container_name: jokes_joke_service
     environment:
-      DB_HOST:     ${DB_HOST}
+      DB_TYPE:     ${DB_TYPE:-mysql}
+      DB_HOST:     ${DB_HOST:-mysql}
       DB_USER:     ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME:     ${DB_NAME}
+      MONGO_URI:   ${MONGO_URI:-mongodb://admin:mongopassword@mongodb:27017/jokesdb?authSource=admin}
       PORT:        4000
     ports:
       - "3000:4000"
     depends_on:
       mysql:
         condition: service_healthy
+        required: false
+      mongodb:
+        condition: service_healthy
+        required: false
     networks:
       - jokes_network
     restart: unless-stopped
 
   # ───────────────────────────────────────────────────────
-  # Submit Service – Accepts jokes, publishes to RabbitMQ
-  # Does NOT talk to MySQL directly (decoupled by design).
-  # Frontend:  http://localhost:3002
-  # Swagger:   http://localhost:3002/docs
-  # Health:    http://localhost:3002/health
+  # Submit Service – Accepts jokes, publishes to "submit" queue
+  # Frontend:  http://localhost:3200
+  # Swagger:   http://localhost:3200/docs
   # ───────────────────────────────────────────────────────
   submit-service:
     build: ./submit-service
     container_name: jokes_submit_service
     environment:
-      RABBITMQ_HOST:     ${RABBITMQ_HOST}
+      RABBITMQ_HOST:     rabbitmq
       RABBITMQ_USER:     ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
-      JOKE_SERVICE_URL:  ${JOKE_SERVICE_URL}
       PORT:              4200
     ports:
       - "3200:4200"
@@ -117,46 +145,76 @@ services:
       rabbitmq:
         condition: service_healthy
     volumes:
-      # Shared named volume for the joke-type cache file.
-      # Allows Submit to return /types even when Joke service is down.
       - type_cache:/app/cache
     networks:
       - jokes_network
     restart: unless-stopped
 
   # ───────────────────────────────────────────────────────
-  # ETL Service – Consumes RabbitMQ, writes to MySQL
-  # Internal service: no public UI
-  # Health:  http://localhost:3003/health
+  # Moderate Service – Human moderation UI
+  # UI:     http://localhost:3300
+  # Auth0 login required to access the moderation UI.
+  # ───────────────────────────────────────────────────────
+  moderate-service:
+    build: ./moderate-service
+    container_name: jokes_moderate_service
+    environment:
+      RABBITMQ_HOST:          rabbitmq
+      RABBITMQ_USER:          ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD:      ${RABBITMQ_PASSWORD}
+      AUTH0_SECRET:           ${AUTH0_SECRET}
+      AUTH0_BASE_URL:         ${AUTH0_BASE_URL:-http://localhost:8000}
+      AUTH0_CLIENT_ID:        ${AUTH0_CLIENT_ID}
+      AUTH0_CLIENT_SECRET:    ${AUTH0_CLIENT_SECRET}
+      AUTH0_ISSUER_BASE_URL:  ${AUTH0_ISSUER_BASE_URL}
+      PORT:                   4300
+    ports:
+      - "3300:4300"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - moderate_type_cache:/app/cache
+    networks:
+      - jokes_network
+    restart: unless-stopped
+
+  # ───────────────────────────────────────────────────────
+  # ETL Service – Consumes "moderated" queue → writes to DB
+  # Publishes ECST type_update events on new type creation.
   # ───────────────────────────────────────────────────────
   etl-service:
     build: ./etl-service
     container_name: jokes_etl_service
     environment:
-      DB_HOST:           ${DB_HOST}
+      DB_TYPE:           ${DB_TYPE:-mysql}
+      DB_HOST:           ${DB_HOST:-mysql}
       DB_USER:           ${DB_USER}
       DB_PASSWORD:       ${DB_PASSWORD}
       DB_NAME:           ${DB_NAME}
-      RABBITMQ_HOST:     ${RABBITMQ_HOST}
+      MONGO_URI:         ${MONGO_URI:-mongodb://admin:mongopassword@mongodb:27017/jokesdb?authSource=admin}
+      RABBITMQ_HOST:     rabbitmq
       RABBITMQ_USER:     ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       PORT:              4001
     ports:
       - "3001:4001"
     depends_on:
-      mysql:
-        condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      mysql:
+        condition: service_healthy
+        required: false
+      mongodb:
+        condition: service_healthy
+        required: false
     networks:
       - jokes_network
     restart: unless-stopped
 
   # ───────────────────────────────────────────────────────
   # Kong API Gateway – DB-less declarative config
-  # Local proxy:  http://localhost:8080/<route>
-  # Admin API:    127.0.0.1:8001 (container-internal only)
-  # Routes all public traffic through a single entry point.
+  # Local proxy:  http://localhost:8000/<route>
   # ───────────────────────────────────────────────────────
   kong:
     image: kong:3.9
@@ -174,13 +232,15 @@ services:
     volumes:
       - ./infra/kong/kong.local.yml:/etc/kong/kong.yml:ro
     ports:
-      - "8000:80"   # Kong HTTP proxy — http://localhost:8000/<route>
+      - "8000:80"
     networks:
       - jokes_network
     depends_on:
       joke-service:
         condition: service_started
       submit-service:
+        condition: service_started
+      moderate-service:
         condition: service_started
       rabbitmq:
         condition: service_healthy
@@ -193,23 +253,22 @@ services:
       start_period: 30s
 
 # =====================================================
-# Named Volumes — Docker-managed persistent storage
-# Data survives container removal; must delete volumes
-# explicitly with: docker-compose down -v
+# Named Volumes
 # =====================================================
 volumes:
   mysql_data:
+    driver: local
+  mongo_data:
     driver: local
   rabbitmq_data:
     driver: local
   type_cache:
     driver: local
+  moderate_type_cache:
+    driver: local
 
 # =====================================================
 # Custom Bridge Network
-# All containers share this network and can reach each
-# other using their service name as a DNS hostname.
-# e.g., http://joke-service:4000 resolves correctly.
 # =====================================================
 networks:
   jokes_network:

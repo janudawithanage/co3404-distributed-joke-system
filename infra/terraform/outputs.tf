@@ -49,6 +49,26 @@ output "deallocate_command" {
   value       = "az vm deallocate -g ${var.resource_group_name} -n vm-kong --no-wait"
 }
 
+output "moderate_public_ip" {
+  description = "Moderate VM (VM3) public IP - for SSH access"
+  value       = azurerm_public_ip.pip_moderate.ip_address
+}
+
+output "moderate_ssh_command" {
+  description = "SSH into the Moderate VM (VM3)"
+  value       = "ssh -i ~/.ssh/co3404_key azureuser@${azurerm_public_ip.pip_moderate.ip_address}"
+}
+
+output "moderate_ui_url" {
+  description = "Moderation UI accessible through Kong"
+  value       = "https://${azurerm_public_ip.pip_kong.ip_address}/moderate-ui"
+}
+
+output "deallocate_all_command" {
+  description = "Deallocate all VMs to stop billing"
+  value       = "az vm deallocate -g ${var.resource_group_name} -n vm-kong --no-wait && az vm deallocate -g ${var.resource_group_name} -n vm-moderate --no-wait"
+}
+
 output "start_command" {
   description = "Restart the Kong VM after deallocation"
   value       = "az vm start -g ${var.resource_group_name} -n vm-kong"

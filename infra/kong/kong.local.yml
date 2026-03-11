@@ -2,30 +2,24 @@
 # infra/kong/kong.local.yml  (LOCAL DEVELOPMENT — Docker Compose)
 #
 # Kong declarative configuration for local docker-compose.yml.
-# Uses Docker service-name DNS resolution (jokes_network bridge) so Kong
-# reaches containers by name, not by VM private IP.
+# Uses Docker service-name DNS resolution (jokes_network bridge).
 #
-# Container ports (what the app listens on inside its container):
-#   joke-service   → port 4000
-#   submit-service → port 4200
-#   rabbitmq mgmt  → port 15672
+# Option 4 routes (new):
+#   GET  /moderate      → moderate-service (protected by Auth0 OIDC)
+#   POST /moderated     → moderate-service (approve joke)
+#   POST /reject        → moderate-service (reject joke)
+#   GET  /moderate-ui   → moderate-service frontend
 #
-# Public routes accessible via http://localhost:8000/<route>:
-#   GET  /joke/:type  → joke-service     (rate-limited: 20 req/min local)
-#   GET  /joke-ui     → joke frontend
-#   GET  /types       → submit-service   (cached proxy to joke-service)
-#   GET  /submit      → submit frontend
-#   POST /submit      → joke submission API
-#   GET  /docs        → Swagger UI
-#   *    /mq-admin    → RabbitMQ Management UI
+# Container ports:
+#   joke-service        → port 4000
+#   submit-service      → port 4200
+#   moderate-service    → port 4300
+#   rabbitmq mgmt       → port 15672
 # =============================================================================
 
 _format_version: "3.0"
 _transform: true
 
-# =============================================================================
-# Global Plugins
-# =============================================================================
 plugins:
   - name: correlation-id
     config:
@@ -33,14 +27,10 @@ plugins:
       generator:       uuid
       echo_downstream: true
 
-# =============================================================================
-# Services and Routes
-# =============================================================================
 services:
 
   # ---------------------------------------------------------------------------
   # Joke Service — Docker DNS: joke-service:4000
-  # (container-internal port 4000; host sees it on localhost:3000)
   # ---------------------------------------------------------------------------
   - name: joke-service
     url:             http://joke-service:4000
@@ -50,14 +40,12 @@ services:
     retries:         3
 
     routes:
-      # GET /joke/:type  — fetch jokes by category
       - name:          joke-route
         paths:         [/joke]
         strip_path:    false
         preserve_host: false
         methods:       [GET, HEAD, OPTIONS]
 
-      # GET /joke-ui  — serve Joke Machine HTML frontend
       - name:          joke-frontend-route
         paths:         [/joke-ui]
         strip_path:    true
@@ -65,18 +53,16 @@ services:
         methods:       [GET, HEAD, OPTIONS]
 
     plugins:
-      # Rate limiting: 20 req/min locally (higher than prod for easier testing)
       - name: rate-limiting
         config:
-          minute:              20
+          minute:              5
           policy:              local
           error_code:          429
-          error_message:       "Rate limit exceeded — 20 req/min allowed. Retry after 60 seconds."
+          error_message:       "Rate limit exceeded — 5 req/min allowed. Retry after 60 seconds."
           hide_client_headers: false
 
   # ---------------------------------------------------------------------------
   # Submit Service — Docker DNS: submit-service:4200
-  # (container-internal port 4200; host sees it on localhost:3200)
   # ---------------------------------------------------------------------------
   - name: submit-service
     url:             http://submit-service:4200
@@ -86,28 +72,24 @@ services:
     retries:         3
 
     routes:
-      # GET /submit  — serve Submit Joke HTML frontend
       - name:          submit-frontend-route
         paths:         [/submit]
         strip_path:    true
         preserve_host: false
         methods:       [GET, HEAD, OPTIONS]
 
-      # POST /submit  — joke submission API (publishes to submitted_jokes queue)
       - name:          submit-api-route
         paths:         [/submit]
         strip_path:    false
         preserve_host: false
         methods:       [POST]
 
-      # GET /types  — list joke categories (proxied from joke-service with cache)
       - name:          types-route
         paths:         [/types]
         strip_path:    false
         preserve_host: false
         methods:       [GET]
 
-      # GET /docs  — Swagger / OpenAPI documentation UI
       - name:          docs-route
         paths:         [/docs]
         strip_path:    false
@@ -115,9 +97,65 @@ services:
         methods:       [GET, HEAD]
 
   # ---------------------------------------------------------------------------
+  # Moderate Service — Docker DNS: moderate-service:4300  (NEW — Option 4)
+  #
+  # Auth0 OIDC authentication is handled INSIDE the moderate-service.
+  # Kong forwards requests without modification. The service uses
+  # express-openid-connect session cookies to protect UI and API endpoints.
+  #
+  # Routes:
+  #   GET  /moderate-ui   → Serves the moderation HTML frontend
+  #                         (strip_path=true: Kong strips /moderate-ui prefix)
+  #   GET  /moderate      → Returns next joke from submit queue
+  #   POST /moderated     → Approves joke, sends to moderated queue
+  #   POST /reject        → Rejects (discards) current pending joke
+  #   GET  /me            → Returns authenticated user profile
+  # ---------------------------------------------------------------------------
+  - name: moderate-service
+    url:             http://moderate-service:4300
+    connect_timeout: 5000
+    read_timeout:    15000
+    write_timeout:   10000
+    retries:         2
+
+    routes:
+      # GET /moderate-ui → serves the moderation frontend HTML
+      - name:          moderate-frontend-route
+        paths:         [/moderate-ui]
+        strip_path:    true
+        preserve_host: false
+        methods:       [GET, HEAD, OPTIONS]
+
+      # GET /moderate → fetch next joke for review (OIDC protected in service)
+      - name:          moderate-get-route
+        paths:         [/moderate]
+        strip_path:    false
+        preserve_host: false
+        methods:       [GET, HEAD]
+
+      # POST /moderated → approve joke (OIDC protected in service)
+      - name:          moderated-post-route
+        paths:         [/moderated]
+        strip_path:    false
+        preserve_host: false
+        methods:       [POST, OPTIONS]
+
+      # POST /reject → discard joke (OIDC protected in service)
+      - name:          reject-route
+        paths:         [/reject]
+        strip_path:    false
+        preserve_host: false
+        methods:       [POST, OPTIONS]
+
+      # Auth0 OIDC callback and logout routes (handled by express-openid-connect)
+      - name:          moderate-auth-route
+        paths:         [/login, /logout, /callback, /me]
+        strip_path:    false
+        preserve_host: false
+        methods:       [GET, POST, OPTIONS]
+
+  # ---------------------------------------------------------------------------
   # RabbitMQ Management UI — Docker DNS: rabbitmq:15672
-  # Accessible at http://localhost:8080/mq-admin  (login: guest / guest)
-  # strip_path:true removes the /mq-admin prefix before forwarding.
   # ---------------------------------------------------------------------------
   - name: rabbitmq-management
     url:             http://rabbitmq:15672

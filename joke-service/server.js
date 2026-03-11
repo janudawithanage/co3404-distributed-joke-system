@@ -1,10 +1,10 @@
 /**
  * joke-service/server.js
  *
- * Joke Microservice
- * ─────────────────
+ * Joke Microservice — Option 4
+ * ─────────────────────────────
  * Responsibilities:
- *   - Serve jokes from the MySQL database
+ *   - Serve jokes from MySQL (default) or MongoDB (DB_TYPE=mongo)
  *   - GET /joke/:type?count=N  — fetch N jokes by type
  *   - GET /types               — list all unique joke categories
  *   - GET /health              — health check
@@ -12,24 +12,24 @@
  *
  * Distributed Systems Note:
  *   This service is stateless — no session or local state.
- *   All data lives in MySQL. This means multiple instances
- *   could be run behind a load balancer for horizontal scaling
- *   (relevant for Phase 2 / Kong gateway).
+ *   All data lives in the database. Multiple instances could run
+ *   behind a load balancer for horizontal scaling.
+ *
+ *   DB_TYPE=mysql (default) → MySQL 8 via mysql2/promise
+ *   DB_TYPE=mongo           → MongoDB via mongoose
  */
 
 'use strict';
 
 const express = require('express');
 const path    = require('path');
-const { pool, connectWithRetry } = require('./db');
+const { connectWithRetry, getJokes, getTypes } = require('./db');
 
 const app  = express();
 const PORT = process.env.PORT || 4000;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CORS — Allow browser requests from any origin (Kong acts as the single
-// public entry point; individual service CORS headers are a defence-in-depth
-// measure for direct VM access during development/testing).
+// CORS
 // ─────────────────────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -40,27 +40,17 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
-
-// Serve static files from /public (frontend HTML + JS)
 app.use(express.static(path.join(__dirname, 'public')));
-// Also serve at /joke-ui/ prefix so that <base href="/joke-ui/"> in index.html
-// resolves assets correctly when the page is loaded via Kong's /joke-ui route.
 app.use('/joke-ui', express.static(path.join(__dirname, 'public')));
 
 // ─────────────────────────────────────────────────────────────
 // GET /types
-// Returns all unique joke categories ordered alphabetically.
-//
-// This endpoint is also consumed by the Submit Service via HTTP
-// to populate its type cache — a service-to-service call within
-// the Docker network (http://joke-service:4000/types).
+// Returns all unique joke categories.
 // ─────────────────────────────────────────────────────────────
-app.get('/types', async (req, res) => {
+app.get('/types', async (_req, res) => {
   try {
-    const [rows] = await pool.query(
-      'SELECT id, name FROM types ORDER BY name'
-    );
-    res.json(rows);
+    const types = await getTypes();
+    res.json(types);
   } catch (err) {
     console.error('[Joke Service] /types error:', err.message);
     res.status(500).json({ error: 'Failed to fetch types' });
@@ -70,42 +60,19 @@ app.get('/types', async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 // GET /joke/:type?count=N
 //
-// Returns jokes of a given type. Optional ?count query param
-// controls how many to return (defaults to 1).
+// Returns jokes of a given type. Optional ?count param controls
+// how many to return (defaults to 1).
 //
 // - type = "any"  → random selection from ALL types
-// - count > DB rows → returns all available (LIMIT handles this)
-// - ORDER BY RAND() → random selection each request (stateless)
+// - count > DB rows → returns all available
+// - ORDER BY RAND() / $sample → random selection each request
 // ─────────────────────────────────────────────────────────────
 app.get('/joke/:type', async (req, res) => {
   const { type } = req.params;
   const count    = Math.max(1, parseInt(req.query.count) || 1);
 
   try {
-    let rows;
-
-    if (type === 'any') {
-      // Random jokes across all types
-      [rows] = await pool.query(
-        `SELECT j.id, j.setup, j.punchline, t.name AS type
-         FROM   jokes j
-         JOIN   types t ON j.type_id = t.id
-         ORDER  BY RAND()
-         LIMIT  ?`,
-        [count]
-      );
-    } else {
-      // Jokes filtered by specific type name
-      [rows] = await pool.query(
-        `SELECT j.id, j.setup, j.punchline, t.name AS type
-         FROM   jokes j
-         JOIN   types t ON j.type_id = t.id
-         WHERE  t.name = ?
-         ORDER  BY RAND()
-         LIMIT  ?`,
-        [type, count]
-      );
-    }
+    const rows = await getJokes(type, count);
 
     if (rows.length === 0) {
       return res.status(404).json({
@@ -114,7 +81,6 @@ app.get('/joke/:type', async (req, res) => {
     }
 
     // Return a single object when count=1, array otherwise.
-    // The frontend normalises both with Array.isArray().
     res.json(count === 1 ? rows[0] : rows);
 
   } catch (err) {
@@ -130,18 +96,20 @@ app.get('/health', (_req, res) => {
   res.json({
     status:    'ok',
     service:   'joke-service',
+    dbType:    process.env.DB_TYPE || 'mysql',
     timestamp: new Date().toISOString()
   });
 });
 
 // ─────────────────────────────────────────────────────────────
-// Startup — connect to DB first, then open HTTP server
+// Startup
 // ─────────────────────────────────────────────────────────────
 async function start() {
   try {
     await connectWithRetry();
     app.listen(PORT, () => {
       console.log(`[Joke Service] Listening on http://localhost:${PORT}`);
+      console.log(`[Joke Service] DB type: ${process.env.DB_TYPE || 'mysql'}`);
     });
   } catch (err) {
     console.error('[Joke Service] Fatal startup error:', err.message);

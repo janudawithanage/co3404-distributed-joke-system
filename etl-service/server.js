@@ -1,54 +1,51 @@
 /**
  * etl-service/server.js
  *
- * ETL (Extract → Transform → Load) Microservice
- * ──────────────────────────────────────────────
+ * ETL (Extract → Transform → Load) Microservice  — Option 4
+ * ──────────────────────────────────────────────────────────
  * Responsibilities:
- *   - Consume messages from RabbitMQ "jokes_queue"
- *   - Insert joke type if not already present (idempotent)
- *   - Insert the joke into MySQL
+ *   - Consume messages from RabbitMQ "moderated" queue
+ *     (jokes approved by the human moderator microservice)
+ *   - Insert joke into MySQL or MongoDB (DB_TYPE env var)
+ *   - After inserting a NEW joke type: publish a type_update
+ *     ECST event to the "type_update" fanout exchange so that
+ *     submit-service and moderate-service refresh their caches
  *   - Acknowledge the message ONLY after a successful DB write
  *   - On DB failure: nack the message so it is re-queued
- *   - Reconnect to both MySQL and RabbitMQ if they go down
- *   - GET /health – optional health endpoint
+ *   - Reconnect to both MySQL/MongoDB and RabbitMQ if they go down
+ *   - GET /health – health endpoint
+ *
+ * ── Message Flow (Option 4) ───────────────────────────────
+ *   submit-service
+ *       → RabbitMQ "submit" queue
+ *           → moderate-service (human review)
+ *               → RabbitMQ "moderated" queue
+ *                   → ETL (THIS) → MySQL or MongoDB
+ *
+ * ── ECST type_update Flow ─────────────────────────────────
+ *   ETL detects new type created in DB
+ *       → publishes to "type_update" fanout exchange
+ *           → "sub_type_update" queue → submit-service
+ *           → "mod_type_update" queue → moderate-service
+ *   Both services update their local types.json cache file.
  *
  * ── Distributed Systems Notes ─────────────────────────────
- *
- *  At-least-once delivery:
- *    RabbitMQ only removes a message from the queue after the
- *    consumer sends an ACK (channel.ack). If the ETL service
- *    crashes before the ACK is sent, RabbitMQ re-delivers the
- *    message on the next connection. This guarantees no data loss.
- *
- *  Idempotent type insert (INSERT IGNORE):
- *    The types table has a UNIQUE constraint on name.
- *    INSERT IGNORE silently skips duplicate inserts, so it is
- *    safe to process the same message twice (re-delivery).
- *
- *  prefetch(1):
- *    Tells RabbitMQ to send at most 1 unacknowledged message
- *    at a time. This prevents the ETL from being flooded if
- *    the DB is slow, and ensures fair dispatch when scaling.
- *
- *  Infinite reconnect loop:
- *    In a distributed system the broker or DB can restart at
- *    any time. The while(true)/try-catch loop ensures the ETL
- *    self-heals without manual intervention.
- *
- * ── Message Flow ──────────────────────────────────────────
- *   Submit Service → RabbitMQ (jokes_queue) → ETL → MySQL
+ *   At-least-once delivery via manual ACK/NACK.
+ *   prefetch(1) prevents message flooding during DB slowdowns.
+ *   Infinite reconnect loop ensures self-healing.
  */
 
 'use strict';
 
 const amqp    = require('amqplib');
 const express = require('express');
-const { pool, connectWithRetry } = require('./db');
+const { connectWithRetry, insertJoke, getAllTypes } = require('./db');
 
 const app  = express();
 const PORT = process.env.PORT || 4001;
 
-const QUEUE_NAME = 'submitted_jokes';
+const MODERATED_QUEUE = 'moderated';
+const TYPE_EXCHANGE   = 'type_update'; // fanout exchange for ECST events
 
 function getRabbitMQUrl() {
   const host = process.env.RABBITMQ_HOST     || 'rabbitmq';
@@ -58,55 +55,26 @@ function getRabbitMQUrl() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Database helpers
+// publishTypeUpdate(publishCh)
+//
+// Fetches all current types from the database and publishes them
+// to the "type_update" fanout exchange.  All bound queues
+// (sub_type_update, mod_type_update) receive the full updated list.
+//
+// Event-Carried State Transfer pattern:
+//   The event carries the complete new state (all types) not just
+//   the delta. This allows any subscriber that was offline to
+//   fully recover by processing the latest event.
 // ─────────────────────────────────────────────────────────────
-
-/**
- * Get the ID of an existing type, or create it if it doesn't exist.
- *
- * INSERT IGNORE + SELECT pattern:
- *   1. Attempt to insert (silently skipped if name already exists)
- *   2. Always SELECT to retrieve the canonical ID
- *
- * This is safe under concurrent access thanks to the UNIQUE
- * constraint and MySQL's transactional INSERT IGNORE behaviour.
- */
-async function getOrCreateType(typeName) {
-  const name = typeName.trim().toLowerCase();
-  await pool.query(
-    'INSERT IGNORE INTO types (name) VALUES (?)',
-    [name]
-  );
-  const [rows] = await pool.query(
-    'SELECT id FROM types WHERE name = ?',
-    [name]
-  );
-  if (!rows.length) {
-    throw new Error(`Type not found after INSERT IGNORE: "${name}"`);
+async function publishTypeUpdate(publishCh) {
+  try {
+    const types   = await getAllTypes();
+    const payload = Buffer.from(JSON.stringify({ types }));
+    publishCh.publish(TYPE_EXCHANGE, '', payload, { persistent: true });
+    console.log(`[ETL] 📡 ECST type_update published (${types.length} types)`);
+  } catch (err) {
+    console.error('[ETL] Failed to publish type_update ECST event:', err.message);
   }
-  return rows[0].id;
-}
-
-/**
- * Insert a joke into the database.
- * Steps:
- *   1. Resolve (or create) the joke type
- *   2. Insert the joke row linked to that type
- *
- * @param {{ setup: string, punchline: string, type: string }} joke
- */
-async function insertJoke({ setup, punchline, type }) {
-  if (!setup || !punchline || !type) {
-    throw new Error('Message missing required fields: setup, punchline, type');
-  }
-  const typeId = await getOrCreateType(type);
-  await pool.query(
-    'INSERT INTO jokes (setup, punchline, type_id) VALUES (?, ?, ?)',
-    [setup, punchline, typeId]
-  );
-  console.log(
-    `[ETL] ✅ Inserted joke (type: ${type}): "${String(setup).substring(0, 50)}…"`
-  );
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -119,18 +87,28 @@ async function startConsumer() {
       conn = await amqp.connect(getRabbitMQUrl());
       console.log('[ETL] Connected to RabbitMQ');
 
+      // ── Consumer channel ─────────────────────────────────────
       const channel = await conn.createChannel();
-
-      // durable: true – queue definition survives broker restart
-      await channel.assertQueue(QUEUE_NAME, { durable: true });
-
-      // prefetch(1) – process one message at a time
+      await channel.assertQueue(MODERATED_QUEUE, { durable: true });
       channel.prefetch(1);
 
-      console.log(`[ETL] Waiting for messages on "${QUEUE_NAME}"…`);
+      // ── Publisher channel for ECST type_update events ─────────
+      // Separate channel to avoid consumer/publisher interference
+      const publishCh = await conn.createChannel();
+      // Declare the fanout exchange (idempotent, safe to call repeatedly)
+      // durable: true – exchange definition survives broker restart
+      await publishCh.assertExchange(TYPE_EXCHANGE, 'fanout', { durable: true });
 
-      // Wrap in a Promise so the while loop blocks here until
-      // the connection closes, then retries from the top.
+      // Pre-declare the subscriber queues and bind them to the exchange.
+      // This ensures the queues exist even if the subscriber services
+      // haven't started yet (no events are lost at startup).
+      await publishCh.assertQueue('sub_type_update', { durable: true });
+      await publishCh.bindQueue('sub_type_update', TYPE_EXCHANGE, '');
+      await publishCh.assertQueue('mod_type_update', { durable: true });
+      await publishCh.bindQueue('mod_type_update', TYPE_EXCHANGE, '');
+
+      console.log(`[ETL] Waiting for messages on "${MODERATED_QUEUE}"…`);
+
       await new Promise((resolve, reject) => {
         conn.on('error', err => {
           console.error('[ETL] RabbitMQ error:', err.message);
@@ -141,49 +119,46 @@ async function startConsumer() {
           reject(new Error('Connection closed'));
         });
 
-        // ── Message handler ──────────────────────────────
-        channel.consume(QUEUE_NAME, async (msg) => {
-          if (!msg) return; // consumer cancelled
+        // ── Message handler ──────────────────────────────────────
+        channel.consume(MODERATED_QUEUE, async (msg) => {
+          if (!msg) return;
 
           const raw = msg.content.toString();
-          console.log('[ETL] Received:', raw);
+          console.log('[ETL] Received moderated joke:', raw);
 
-          // ── Step 1: Parse — permanent failure if invalid JSON ──
+          // Step 1: Parse
           let joke;
           try {
             joke = JSON.parse(raw);
-          } catch (parseErr) {
-            // Malformed JSON can never be fixed by requeuing.
-            // nack with requeue=false discards the message (dead-letter).
-            console.error('[ETL] ❌ Invalid JSON — discarding message:', raw);
+          } catch (_) {
+            console.error('[ETL] ❌ Invalid JSON — discarding:', raw);
             channel.nack(msg, false, false);
             return;
           }
 
-          // ── Step 2: Validate — permanent failure if fields missing ──
+          // Step 2: Validate
           if (!joke.setup || !joke.punchline || !joke.type) {
-            console.error('[ETL] ❌ Missing fields — discarding message:', joke);
+            console.error('[ETL] ❌ Missing fields — discarding:', joke);
             channel.nack(msg, false, false);
             return;
           }
 
-          // ── Step 3: Write to DB — transient failure → requeue ─────
+          // Step 3: Write to DB
           try {
-            await insertJoke(joke);
+            const { isNewType } = await insertJoke(joke);
 
-            // ACK only after successful DB write.
-            // If we crash here before ACK, RabbitMQ re-delivers.
+            // ACK only after successful DB write
             channel.ack(msg);
 
-          } catch (dbErr) {
-            console.error('[ETL] ❌ DB write failed — requeuing message:', dbErr.message);
+            // Step 4: If new type was created, emit ECST type_update event
+            if (isNewType) {
+              console.log(`[ETL] New type detected: "${joke.type}" — emitting ECST event`);
+              await publishTypeUpdate(publishCh);
+            }
 
-            // nack(msg, allUpTo=false, requeue=true)
-            // DB errors are transient — requeue so the ETL retries
-            // once the DB recovers (e.g. after a MySQL restart).
-            // Note: In production add a dead-letter exchange with a
-            // max-retry counter to prevent infinite loops on a bad
-            // but well-formed message.
+          } catch (dbErr) {
+            console.error('[ETL] ❌ DB write failed — requeuing:', dbErr.message);
+            // Transient DB error → requeue for retry
             channel.nack(msg, false, true);
           }
         });
@@ -192,9 +167,9 @@ async function startConsumer() {
     } catch (err) {
       console.error('[ETL] Connection error – retrying in 5 s:', err.message);
       if (conn) {
-        try { await conn.close(); } catch (_) { /* ignore close errors */ }
+        try { await conn.close(); } catch (_) { /* ignore */ }
       }
-      await new Promise(res => setTimeout(res, 5000));
+      await new Promise(r => setTimeout(r, 5000));
     }
   }
 }
@@ -206,6 +181,7 @@ app.get('/health', (_req, res) => {
   res.json({
     status:    'ok',
     service:   'etl-service',
+    dbType:    process.env.DB_TYPE || 'mysql',
     timestamp: new Date().toISOString()
   });
 });
@@ -215,20 +191,14 @@ app.get('/health', (_req, res) => {
 // ─────────────────────────────────────────────────────────────
 async function start() {
   try {
-    // Connect to MySQL with retry before accepting any messages
     await connectWithRetry();
 
-    // Start the health-check HTTP server
     app.listen(PORT, () => {
       console.log(`[ETL Service] Health endpoint at http://localhost:${PORT}/health`);
+      console.log(`[ETL Service] DB type: ${process.env.DB_TYPE || 'mysql'}`);
     });
 
-    // Start the consumer loop (runs indefinitely in background)
-    // Not awaited – startConsumer() loops forever and handles
-    // its own errors internally.
     startConsumer().catch(err => {
-      // Should never reach here due to internal while(true),
-      // but catch as a safety net
       console.error('[ETL] Unexpected consumer exit:', err.message);
       process.exit(1);
     });

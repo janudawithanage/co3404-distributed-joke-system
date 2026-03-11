@@ -1,13 +1,13 @@
 # CO3404 Distributed Joke System
 
-A distributed microservices application built for the **CO3404 Distributed Systems** module at Ulster University. Users can browse and submit jokes through a web interface backed by a fully decoupled, message-driven architecture deployed on Azure.
+A distributed microservices application built for the **CO3404 Distributed Systems** module at Ulster University. Users can browse, submit, and moderate jokes through web interfaces backed by a fully decoupled, message-driven architecture deployed on Azure.
 
 ---
 
 ## Table of Contents
 
 - [Architecture](#architecture)
-- [Hosted Links (Azure — Live)](#hosted-links-azure--live)
+- [Hosted Links (Azure)](#hosted-links-azure)
 - [Local Development Links](#local-development-links)
 - [Quick Start (Local)](#quick-start-local)
 - [How to Run on Azure](#how-to-run-on-azure)
@@ -23,86 +23,101 @@ A distributed microservices application built for the **CO3404 Distributed Syste
 
 ```
 Browser / curl
-      │
-      ▼  HTTPS (443) / HTTP (80)
-┌─────────────────────────────────┐
-│   Kong API Gateway  (VM3)       │  — TLS termination, routing,
-│   85.211.240.162                │    rate limiting, request IDs
-└──────────┬──────────────────────┘
-           │ private Azure VNet (10.0.1.x)
-     ┌─────┴──────────┐
-     ▼                ▼
-  VM1 (10.0.1.4)   VM2 (10.0.1.5)
-  ┌────────────┐   ┌──────────────────┐
-  │Joke Service│   │ Submit Service   │
-  │  :3001     │   │  :3002           │
-  │            │   │                  │
-  │ETL Service │   │ RabbitMQ         │
-  │  :3003     │   │  :5672 / :15672  │
-  └──────┬─────┘   └────────┬─────────┘
-         │                  │
-         └──────┬───────────┘
-                ▼
-            MySQL :3306  (VM1)
+      |
+      v  HTTPS (443) / HTTP (80)
++-----------------------------------+
+|   Kong API Gateway  (VM4)         |  -- TLS termination, routing,
+|   10.0.1.6  :443/:80              |     rate limiting, correlation IDs
++----------+------------------------+
+           | private Azure VNet (10.0.1.x)
+     +-----+--------------------+
+     v                          v
+  VM1 (10.0.1.4)          VM2 (10.0.1.5)
+  +------------------+    +---------------------+
+  |Joke Service :3001|    |Submit Service  :3002 |
+  |ETL Service       |    |Moderate Service:3004 |
+  |  (internal)      |    |RabbitMQ  :5672/:15672|
+  |MySQL :3306       |    +---------------------+
+  +------------------+
+```
+
+### Message / Event Flow
+
+```
+Browser --> POST /submit --> submit-service --> "submit" queue --> moderate-service
+                                                                        |
+                                                     Approve/Reject (Auth0 OIDC UI)
+                                                                        |
+                                               "moderated" queue --> etl-service --> DB
+                                                                        |
+                                                      type_update fanout exchange
+                                                      /                     \
+                                           sub_type_update         mod_type_update
+                                        (submit ECST cache)    (moderate ECST cache)
 ```
 
 | Service | VM | Role |
 |---|---|---|
-| **Joke Service** | VM1 :3001 | Serves jokes from MySQL; provides a browsing frontend |
-| **ETL Service** | VM1 :3003 | Consumes RabbitMQ queue and persists jokes to MySQL |
-| **MySQL** | VM1 :3306 | Persistent relational store for joke types and jokes |
-| **Submit Service** | VM2 :3002 | Accepts new jokes, publishes to RabbitMQ; serves submission frontend + Swagger docs |
-| **RabbitMQ** | VM2 :5672 | Message broker decoupling Submit from ETL |
-| **Kong** | VM3 :443/80 | DB-less API gateway — single public entry point, TLS, rate-limiting, correlation IDs |
+| **Joke Service** | VM1 :3001 | Serves jokes from MySQL/MongoDB; provides a browsing frontend |
+| **ETL Service** | VM1 (internal) | Consumes `moderated` queue; writes to DB; publishes ECST type_update |
+| **MySQL** | VM1 :3306 | Relational store for joke types and jokes |
+| **Submit Service** | VM2 :3002 | Accepts new jokes; publishes to `submit` queue; Swagger docs |
+| **RabbitMQ** | VM2 :5672 | Message broker: `submit`, `moderated`, `type_update` fanout exchange |
+| **Moderate Service** | VM2 :3004 | Auth0 OIDC-protected UI; reviewer approves/rejects queued jokes |
+| **Kong** | VM4 :443/80 | DB-less API gateway: TLS, rate-limiting, correlation IDs |
 
 ---
 
-## Hosted Links (Azure — Live)
+## Hosted Links (Azure)
 
-> All public traffic goes through the **Kong API Gateway** only.  
-> Kong uses a self-signed certificate — add `-k` to any `curl` command.
+> All public traffic goes through **Kong** only. Kong uses a self-signed certificate — add `-k` to any `curl` command, or install `infra/kong/certs/server.crt` into your system keychain.
 
 **Kong Base URL:** `https://85.211.240.162`
+
+> ⚠️ Azure VMs may be deallocated to save costs. If unreachable, start them:
+> ```bash
+> az vm start -g rg-co3404-jokes -n vm-joke
+> az vm start -g rg-co3404-jokes -n vm-submit
+> az vm start -g rg-co3404-jokes -n vm-kong
+> ```
 
 ### Web UIs
 
 | URL | Description |
 |---|---|
-| [https://85.211.240.162/joke-ui](https://85.211.240.162/joke-ui) | 🎭 Joke Machine — browse jokes |
-| [https://85.211.240.162/submit](https://85.211.240.162/submit) | 📝 Submit a joke |
-| [https://85.211.240.162/docs](https://85.211.240.162/docs) | 📖 Swagger / OpenAPI interactive docs |
+| `https://85.211.240.162/joke-ui` | Joke Machine — browse jokes |
+| `https://85.211.240.162/submit` | Submit a joke |
+| `https://85.211.240.162/moderate-ui` | Moderate jokes (Auth0 login required) |
+| `https://85.211.240.162/docs` | Swagger / OpenAPI interactive docs |
 
 ### API Endpoints (via Kong)
 
 | Method | URL | Description |
 |---|---|---|
-| `GET` | `https://85.211.240.162/joke/programming` | Get a random programming joke |
-| `GET` | `https://85.211.240.162/joke/any` | Get a random joke of any type |
-| `GET` | `https://85.211.240.162/joke/any?count=3` | Get 3 random jokes |
-| `GET` | `https://85.211.240.162/types` | List all joke categories |
-| `POST` | `https://85.211.240.162/submit` | Submit a new joke |
+| `GET` | `/joke/programming` | Get a random programming joke |
+| `GET` | `/joke/any` | Get a random joke of any type |
+| `GET` | `/joke/any?count=3` | Get 3 random jokes |
+| `GET` | `/types` | List all joke categories |
+| `POST` | `/submit` | Submit a new joke (queues for moderation) |
+| `GET` | `/moderate` | Moderation API (Auth0 protected) |
+| `POST` | `/moderated` | Approve a joke (Auth0 session required) |
+| `POST` | `/reject` | Reject a joke (Auth0 session required) |
 
 ### Quick Test Commands (Azure)
 
 ```bash
-# Set the Kong IP once
 export KONG_IP=85.211.240.162
 
-# Get all joke types
 curl -sk https://$KONG_IP/types
-
-# Get a random programming joke
 curl -sk https://$KONG_IP/joke/programming
-
-# Get 3 random jokes of any type
 curl -sk "https://$KONG_IP/joke/any?count=3"
 
-# Submit a new joke
+# Submit a new joke (will queue for human moderation)
 curl -sk -X POST https://$KONG_IP/submit \
   -H "Content-Type: application/json" \
   -d '{"setup":"Why did the DevOps engineer quit?","punchline":"Because they kept getting deployed to production.","type":"programming"}'
 
-# Trigger rate limit (5 req/min on /joke — sends 8 requests)
+# Trigger rate limit (5 req/min on /joke)
 for i in $(seq 1 8); do
   echo -n "Request $i: "
   curl -sk -o /dev/null -w "%{http_code}\n" https://$KONG_IP/joke/any
@@ -110,41 +125,42 @@ for i in $(seq 1 8); do
 done
 ```
 
-> ⚠️ The `/joke/:type` route is **rate limited to 5 requests per minute** per IP. Requests 6–8 will return `429 Too Many Requests`.
-
-> ℹ️ `/health` is **not** exposed through Kong — it is an internal Docker health check only.
+> Rate limit: `/joke/:type` is limited to **5 requests/minute per IP**. Requests 6–8 return `429 Too Many Requests`.
 
 ---
 
 ## Local Development Links
 
-After running `docker compose up -d` the following URLs become available:
+After running `docker compose up -d`:
 
-### Via Kong Gateway (port 8000) — recommended
+### Via Kong Gateway (port 8000) -- recommended
 
 | URL | Description |
 |---|---|
-| http://localhost:8000/joke-ui | 🎭 Joke Machine frontend |
-| http://localhost:8000/submit | 📝 Submit a joke frontend |
-| http://localhost:8000/docs | 📖 Swagger UI |
-| http://localhost:8000/joke/programming | API — get a joke |
-| http://localhost:8000/joke/any?count=3 | API — get 3 jokes |
-| http://localhost:8000/types | API — list categories |
+| http://localhost:8000/joke-ui | Joke Machine frontend |
+| http://localhost:8000/submit | Submit a joke frontend |
+| http://localhost:8000/moderate-ui | Moderation UI (Auth0 login required) |
+| http://localhost:8000/docs | Swagger UI |
+| http://localhost:8000/joke/programming | API -- get a joke |
+| http://localhost:8000/types | API -- list categories |
 
 ### Direct Service Ports (bypass Kong — dev/debug only)
 
-| URL | Service | Description |
+| URL | Service | Notes |
 |---|---|---|
-| http://localhost:3000 | Joke Service | Frontend + API (host port `3000` → container `4000`) |
-| http://localhost:3000/joke/programming | Joke Service | Direct API call |
-| http://localhost:3000/types | Joke Service | Direct types endpoint |
+| http://localhost:3000 | Joke Service | host 3000 -> container 4000 |
 | http://localhost:3000/health | Joke Service | Health check |
-| http://localhost:3200 | Submit Service | Frontend + API (host port `3200` → container `4200`) |
+| http://localhost:3200 | Submit Service | host 3200 -> container 4200 |
 | http://localhost:3200/docs | Submit Service | Swagger UI |
 | http://localhost:3200/health | Submit Service | Health check |
-| http://localhost:3001/health | ETL Service | Health check (host port `3001` → container `4001`) |
-| http://localhost:15672 | RabbitMQ | Management UI — login: `guest` / `guest` |
-| localhost:3306 | MySQL | Direct DB connection (user: `jokeuser`, password: `jokepassword`) |
+| http://localhost:3300 | Moderate Service | host 3300 -> container 4300 |
+| http://localhost:3300/health | Moderate Service | Health check |
+| http://localhost:15672 | RabbitMQ | Management UI (guest / guest) |
+| localhost:3306 | MySQL | jokeuser / jokepassword |
+
+> **Azure direct access** (bypassing Kong):
+> - VM1 public IP `85.211.178.130` — joke-service on port 3001
+> - VM2 public IP `85.211.241.251` — submit on 3002, moderate on 3004, RabbitMQ on 15672
 
 ---
 
@@ -152,241 +168,167 @@ After running `docker compose up -d` the following URLs become available:
 
 ### Prerequisites
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (includes Docker Engine + Compose)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- Auth0 account (free tier works -- see Auth0 Setup below)
 
-### Step 1 — Clone the repo
+### Step 1 -- Clone the repo
 
 ```bash
 git clone <repo-url>
 cd co3404-distributed-joke-system
 ```
 
-### Step 2 — Configure environment
+### Step 2 -- Configure environment
 
 ```bash
 cp .env.example .env
+# Edit .env and fill in AUTH0_* values
 ```
 
-The defaults in `.env.example` work out of the box — no changes needed for local development.
-
-### Step 3 — Build and start all services
+### Step 3 -- Start all services
 
 ```bash
+# Default MySQL mode (uses 'default' profile, no flag needed)
 docker compose up -d
+
+# Or MongoDB mode (starts MongoDB instead of MySQL)
+DB_TYPE=mongo docker compose --profile mongo up -d
 ```
 
-This starts 6 containers: `mysql`, `rabbitmq`, `joke-service`, `submit-service`, `etl-service`, and `kong`.  
-Startup takes ~30 seconds for MySQL and RabbitMQ health checks to pass.
+Startup takes ~30s for MySQL and RabbitMQ health checks to pass.
 
-### Step 4 — Verify everything is running
+### Step 4 -- Verify
 
 ```bash
 docker compose ps
-```
-
-All containers should show `healthy` or `running`. Then test:
-
-```bash
-# Should return a list of joke types
 curl http://localhost:8000/types
-
-# Should return a joke
 curl http://localhost:8000/joke/programming
 ```
 
-### Step 5 — Open the app
+### Step 5 -- Open the app
 
-| URL | What you'll see |
+| URL | Description |
 |---|---|
-| http://localhost:8000/joke-ui | Joke browser frontend |
-| http://localhost:8000/submit | Joke submission form |
-| http://localhost:8000/docs | Swagger interactive API docs |
-| http://localhost:15672 | RabbitMQ dashboard (guest / guest) |
+| http://localhost:8000/joke-ui | Joke browser |
+| http://localhost:8000/submit | Submit jokes |
+| http://localhost:8000/moderate-ui | Moderation UI (Auth0 login) |
+| http://localhost:8000/docs | Swagger docs |
+| http://localhost:15672 | RabbitMQ dashboard (guest/guest) |
 
-### Step 6 — View logs
+### Auth0 Setup
 
-```bash
-# All services
-docker compose logs -f
+1. Create a free Auth0 account and a Regular Web Application
+2. Set Allowed Callback URLs: `http://localhost:8000/callback`
+3. Set Allowed Logout URLs: `http://localhost:8000`
+4. Add to `.env`:
 
-# Individual service
-docker compose logs -f joke-service
-docker compose logs -f submit-service
-docker compose logs -f etl-service
-docker compose logs -f kong
 ```
-
-### Step 7 — Stop and clean up
-
-```bash
-# Stop containers, keep volumes (data preserved on next start)
-docker compose down
-
-# Stop containers AND wipe all data (full reset)
-docker compose down -v
+AUTH0_CLIENT_ID=your-client-id
+AUTH0_CLIENT_SECRET=your-client-secret
+AUTH0_ISSUER_BASE_URL=https://your-domain.auth0.com
+AUTH0_BASE_URL=http://localhost:8000
+AUTH0_SECRET=any-long-random-string-32-chars-minimum
 ```
 
 ---
 
 ## How to Run on Azure
 
-### Prerequisites
-
-- Azure CLI installed and logged in (`az login`)
-- Terraform installed
-- SSH key at `~/.ssh/co3404_key`
-
-### Step 1 — Provision infrastructure
+### Step 1 -- Provision infrastructure
 
 ```bash
 cd infra/terraform
 cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars with your subscription ID and SSH public key
-terraform init
-terraform apply
+# Fill in subscription_id, ssh_public_key, Auth0 vars
+terraform init && terraform apply
 ```
 
-### Step 2 — Get VM IPs
+Creates 4 VMs: VM1 (joke-vm), VM2 (submit-vm), VM3 (moderate-vm), VM4 (kong-vm).
 
-```bash
-terraform output
-# kong_public_ip  = "85.211.240.162"
-# ssh_command     = "ssh -i ~/.ssh/co3404_key azureuser@85.211.240.162"
-```
-
-### Step 3 — Deploy services
+### Step 2 -- Deploy VM1 + VM2
 
 ```bash
 cd ../..
-# Edit infra/deploy.sh — set VM1_IP and VM2_IP from the Azure portal
-# az vm list-ip-addresses -g rg-co3404-jokes -o table
-
-chmod +x infra/deploy.sh
+# Edit infra/deploy.sh: set VM1_IP, VM2_IP
 ./infra/deploy.sh
-```
 
-### Step 4 — SSH into VMs and start services
-
-```bash
-# VM1 — Joke Service, ETL Service, MySQL
+# SSH and start
 ssh -i ~/.ssh/co3404_key azureuser@<VM1_IP>
-cd ~/co3404 && docker compose -f vm1-compose.yml up -d
+cd ~/co3404 && docker compose up -d
 
-# VM2 — Submit Service, RabbitMQ
 ssh -i ~/.ssh/co3404_key azureuser@<VM2_IP>
-cd ~/co3404 && docker compose -f vm2-compose.yml up -d
+cd ~/co3404 && docker compose up -d
 ```
 
-### Step 5 — Kong starts automatically on VM3
+### Step 3 -- Deploy VM3 (moderate-service)
 
-Kong is managed by the Terraform provisioner on VM3 and starts automatically after provisioning.
+**Automated (recommended):** GitHub Actions deploys VM3 automatically on every push to `main` that touches `moderate-service/**`.
 
-### Cost Management
+**Manual (first-time setup):**
 
 ```bash
-# Deallocate Kong VM to stop billing (preserves disk/IP)
-az vm deallocate -g rg-co3404-jokes -n vm-kong --no-wait
+# Bootstrap Docker on VM3
+scp -i ~/.ssh/co3404_key infra/vm3-setup.sh azureuser@<VM3_IP>:/tmp/
+ssh -i ~/.ssh/co3404_key azureuser@<VM3_IP> "chmod +x /tmp/vm3-setup.sh && sudo /tmp/vm3-setup.sh"
 
-# Start it again
-az vm start -g rg-co3404-jokes -n vm-kong
+# Deploy compose file + env
+scp -i ~/.ssh/co3404_key infra/vm3-compose.yml azureuser@<VM3_IP>:~/moderate/docker-compose.yml
+scp -i ~/.ssh/co3404_key infra/.env.vm3 azureuser@<VM3_IP>:~/moderate/.env
+ssh -i ~/.ssh/co3404_key azureuser@<VM3_IP> "cd ~/moderate && docker compose pull && docker compose up -d"
 ```
+
+GitHub Actions secrets required for CI/CD:
+`DOCKER_USERNAME`, `DOCKER_PASSWORD`, `VM3_HOST`, `VM3_USER`, `VM3_SSH_KEY`,
+`AUTH0_SECRET`, `AUTH0_BASE_URL`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, `AUTH0_ISSUER_BASE_URL`,
+`RABBITMQ_HOST`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
+
+### Step 4 -- Kong (VM4)
+
+Kong is fully managed by Terraform provisioners and starts automatically after `terraform apply`.
 
 ---
 
 ## API Reference
 
-All routes below work on both local (`http://localhost:8000`) and Azure (`https://85.211.240.162`).
-
 ### GET /types
-
-Returns all joke categories ordered alphabetically.
 
 ```bash
 curl http://localhost:8000/types
-# → [{"id":1,"name":"dad"},{"id":2,"name":"general"},...]
+# [{"id":1,"name":"dad"},{"id":2,"name":"general"},...]
 ```
 
 ### GET /joke/:type
 
-Returns one random joke. Use `any` for any category.
-
 ```bash
 curl http://localhost:8000/joke/programming
-curl http://localhost:8000/joke/dad
 curl http://localhost:8000/joke/any
+# {"id":3,"setup":"...","punchline":"...","type":"programming"}
 ```
 
-**Response (HTTP 200):**
-```json
-{
-  "id": 3,
-  "setup": "Why do programmers prefer dark mode?",
-  "punchline": "Because light attracts bugs!",
-  "type": "programming"
-}
-```
-
-**Not found (HTTP 404):**
-```json
-{ "error": "No jokes found for type: \"unknown\"" }
-```
-
-> ⚠️ Rate limited: **5 requests/minute per IP** (returns `429` after limit exceeded).
+> Rate limited: 5 requests/minute per IP via Kong. Returns `429` after limit.
 
 ### GET /joke/:type?count=N
 
-Returns N random jokes as an array. If N exceeds available jokes, all are returned without error.
-
 ```bash
-curl "http://localhost:8000/joke/programming?count=2"
 curl "http://localhost:8000/joke/any?count=5"
 ```
 
 ### POST /submit
 
-Submits a new joke to the RabbitMQ queue. The ETL service picks it up and writes it to MySQL.
-
 ```bash
 curl -X POST http://localhost:8000/submit \
   -H "Content-Type: application/json" \
-  -d '{"setup":"Why do Java developers wear glasses?","punchline":"Because they don'\''t C#!","type":"programming"}'
+  -d '{"setup":"...","punchline":"...","type":"programming"}'
+# 202: {"message":"Joke queued for moderation","queued":{...}}
 ```
 
-**Request body:**
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `setup` | string | ✅ | The joke setup / question |
-| `punchline` | string | ✅ | The punchline / answer |
-| `type` | string | ✅ | Category (e.g. `programming`, `dad`, `general`) |
+### GET /moderate (Auth0 protected)
 
-**Response (HTTP 202):**
-```json
-{
-  "message": "Joke queued for processing by the ETL service",
-  "queued": { "setup": "...", "punchline": "...", "type": "programming" }
-}
-```
-
-**Errors:**
-- `400` — missing `setup`, `punchline`, or `type`
-- `503` — RabbitMQ unavailable
+Opens the moderation UI. Requires Auth0 login. Moderators can edit, approve, or reject jokes.
 
 ### GET /docs
 
 Swagger / OpenAPI interactive documentation for the Submit Service.
-
-```
-http://localhost:8000/docs        (local)
-https://85.211.240.162/docs       (Azure)
-```
-
-### GET /joke-ui
-
-Joke Machine web frontend.
-
-### GET /submit (GET)
-
-Joke submission web frontend.
 
 ---
 
@@ -394,33 +336,44 @@ Joke submission web frontend.
 
 ```
 .
-├── docker-compose.yml            # Local development — all 6 services
-├── .env.example                  # Environment variable template (copy to .env)
-├── db/
-│   └── init.sql                  # MySQL schema + seed data (auto-runs on first start)
-├── joke-service/                 # Node.js — serves jokes from MySQL
-│   ├── server.js                 # Express app — GET /joke/:type, GET /types, GET /health
-│   ├── db.js                     # MySQL connection pool with retry
-│   └── public/                   # Frontend HTML + JS
-├── submit-service/               # Node.js — accepts submissions via RabbitMQ
-│   ├── server.js                 # Express app — POST /submit, GET /types (cache), GET /docs
-│   ├── rabbitmq.js               # AMQP connection + publish helper
-│   └── public/                   # Frontend HTML + JS
-├── etl-service/                  # Node.js — RabbitMQ consumer → MySQL
-│   ├── server.js                 # Consumes jokes_queue, writes to MySQL, GET /health
-│   └── db.js                     # MySQL connection pool with retry
-└── infra/
-    ├── kong/
-    │   ├── kong.local.yml        # Kong config for local Docker (HTTP only)
-    │   └── kong.yml              # Kong config for Azure (HTTPS + rate limiting)
-    ├── vm1-compose.yml           # Azure VM1: MySQL + Joke Service + ETL Service
-    ├── vm2-compose.yml           # Azure VM2: RabbitMQ + Submit Service
-    ├── deploy.sh                 # Copies source files to Azure VMs via scp
-    └── terraform/
-        ├── main.tf               # Azure VMs, VNet, NSG, public IPs
-        ├── variables.tf          # Input variables
-        ├── outputs.tf            # IPs, test commands, SSH commands
-        └── terraform.tfvars.example
++-- docker-compose.yml            # Local dev: all 8 services
++-- .env.example                  # Environment template
++-- db/
+|   +-- init.sql                  # MySQL schema + seed data
++-- joke-service/                 # GET /joke/:type, GET /types, GET /health
+|   +-- server.js
+|   +-- db.js                     # MySQL + MongoDB adapter (DB_TYPE)
+|   +-- public/                   # Frontend HTML + JS
++-- submit-service/               # POST /submit, GET /types (ECST), Swagger
+|   +-- server.js
+|   +-- rabbitmq.js               # Producer + ECST sub_type_update subscriber
+|   +-- public/                   # Frontend HTML + JS
++-- moderate-service/             # Auth0 OIDC moderation UI
+|   +-- server.js                 # GET /moderate, POST /moderated, POST /reject
+|   +-- rabbitmq.js               # 3 channels: consumer, producer, ECST
+|   +-- auth.js                   # Auth0 config + requiresAuthJson middleware
+|   +-- public/                   # Moderation UI
++-- etl-service/                  # Consumes moderated queue -> DB + ECST publisher
+|   +-- server.js
+|   +-- db.js                     # MySQL + MongoDB adapter
++-- infra/
+|   +-- kong/
+|   |   +-- kong.local.yml        # Local Kong config (service hostnames)
+|   |   +-- kong.yml              # Production Kong config (private IPs)
+|   |   +-- docker-compose.yml    # Kong with TLS
+|   +-- vm1-compose.yml           # VM1: MySQL + Joke Service + ETL
+|   +-- vm2-compose.yml           # VM2: RabbitMQ + Submit Service
+|   +-- vm3-compose.yml           # VM3: Moderate Service
+|   +-- vm3-setup.sh              # Bootstrap Docker on VM3 (moderate-vm)
+|   +-- deploy.sh                 # scp deploy to VM1 + VM2 (VM3 via CI/CD)
+|   +-- terraform/
+|       +-- main.tf               # 4 Azure VMs, VNet, NSG, Kong TLS provisioner
+|       +-- variables.tf          # Inputs: subscription, SSH key, Auth0, VM3
+|       +-- outputs.tf            # IPs, SSH commands
+|       +-- terraform.tfvars.example
++-- .github/
+    +-- workflows/
+        +-- deploy-moderate.yml   # CI/CD: Docker build+push, SSH deploy to VM3
 ```
 
 ---
@@ -428,13 +381,12 @@ Joke submission web frontend.
 ## Database Schema
 
 ```sql
--- Joke categories
 CREATE TABLE types (
   id   INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(100) UNIQUE NOT NULL
 );
 
--- Individual jokes
+-- Only approved (moderated) jokes reach this table
 CREATE TABLE jokes (
   id        INT AUTO_INCREMENT PRIMARY KEY,
   setup     TEXT NOT NULL,
@@ -444,39 +396,50 @@ CREATE TABLE jokes (
 );
 ```
 
-**Seed categories:** `general`, `programming`, `knock-knock`, `dad`, `science`
+Seed categories: `general`, `programming`, `knock-knock`, `dad`, `science`
+
+With MongoDB (`DB_TYPE=mongo`), the same schema is represented as Mongoose `Type` and `Joke` models.
 
 ---
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` — defaults work for local development without any changes.
-
 | Variable | Default | Description |
 |---|---|---|
-| `DB_HOST` | `mysql` | MySQL hostname (Docker service name) |
-| `DB_USER` | `jokeuser` | MySQL application user |
-| `DB_PASSWORD` | `jokepassword` | MySQL application password |
+| `DB_HOST` | `mysql` | MySQL hostname |
+| `DB_USER` | `jokeuser` | MySQL user |
+| `DB_PASSWORD` | `jokepassword` | MySQL password |
 | `DB_NAME` | `jokesdb` | MySQL database name |
 | `DB_ROOT_PASSWORD` | `rootpassword` | MySQL root password |
-| `RABBITMQ_HOST` | `rabbitmq` | RabbitMQ hostname (Docker service name) |
+| `DB_TYPE` | `mysql` | Database adapter: `mysql` or `mongo` |
+| `MONGO_URI` | -- | MongoDB URI (when DB_TYPE=mongo) |
+| `RABBITMQ_HOST` | `rabbitmq` | RabbitMQ hostname |
 | `RABBITMQ_USER` | `guest` | RabbitMQ username |
 | `RABBITMQ_PASSWORD` | `guest` | RabbitMQ password |
-| `JOKE_SERVICE_URL` | `http://joke-service:4000` | Internal URL used by Submit Service to proxy `/types` |
+| `AUTH0_SECRET` | -- | Session encryption secret (32+ chars) |
+| `AUTH0_BASE_URL` | `http://localhost:8000` | Public URL through Kong |
+| `AUTH0_CLIENT_ID` | -- | Auth0 application client ID |
+| `AUTH0_CLIENT_SECRET` | -- | Auth0 application client secret |
+| `AUTH0_ISSUER_BASE_URL` | -- | `https://your-domain.auth0.com` |
+
+Copy `.env.example` to `.env`. Defaults work for local development except Auth0 variables.
 
 ---
 
 ## Key Design Decisions
 
-- **Submit never writes to the DB directly.** It publishes to RabbitMQ. Submissions succeed even if MySQL is temporarily down.
-- **At-least-once delivery.** ETL only ACKs a RabbitMQ message after a successful DB write. If ETL crashes, RabbitMQ re-delivers.
-- **Idempotent type inserts.** `INSERT IGNORE` on `types` prevents duplicates when the same message is re-delivered.
-- **Cache-aside on `/types`.** Submit Service caches joke types to a Docker named volume — it can serve types even when Joke Service is offline.
-- **prefetch(1) on ETL.** Prevents the ETL from being flooded when the DB is slow; ensures fair message dispatch when scaling horizontally.
-- **Kong as the single origin.** No client ever contacts VM1 or VM2 directly. All routing, TLS, and rate limiting is enforced at Kong.
+- **Moderation before persistence.** Submitted jokes enter `submit` queue -> moderate-service. Only approved jokes reach `moderated` queue -> ETL -> DB. Rejected jokes are nack'd (requeue=false).
+- **Auth0 OIDC.** `express-openid-connect` with `authRequired: false`. API routes use `requiresAuthJson()` returning 401 JSON. Browser routes use `requiresAuth()` for redirect flow.
+- **ECST (Event-Carried State Transfer).** ETL publishes to `type_update` fanout exchange after each new type insertion. Submit (`sub_type_update`) and Moderate (`mod_type_update`) services cache the type list locally, removing HTTP polling dependency on joke-service.
+- **At-least-once delivery.** ETL acks `moderated` messages only after confirmed DB write. Moderate acks `submit` messages only after forwarding to `moderated` queue.
+- **Idempotent type inserts.** MySQL uses `INSERT IGNORE`; MongoDB uses `findOneAndUpdate` with `upsert:true` and `$setOnInsert`.
+- **MySQL / MongoDB switching.** `DB_TYPE` env var selects the adapter at startup in both `joke-service/db.js` and `etl-service/db.js`.
+- **prefetch(1).** Both consumers (moderate-service on `submit`, etl-service on `moderated`) use prefetch(1) to prevent consumer flooding.
+- **Kong as the single origin.** VM1, VM2, VM3 are not publicly reachable. All routing, TLS, and rate limiting is enforced at Kong (VM4).
+- **CI/CD for moderate-service.** GitHub Actions builds Docker image, pushes to Docker Hub, and SSH-deploys to VM3 via `docker compose pull && up --force-recreate` on every push to main.
 
 ---
 
 ## Module
 
-**CO3404 Distributed Systems** — Ulster University
+**CO3404 Distributed Systems** -- Ulster University

@@ -1,24 +1,26 @@
 # =============================================================================
 # infra/terraform/main.tf
 #
-# Phase 3 — Kong API Gateway on Azure
+# Phase 4 -- Moderate Service (VM3) + Kong API Gateway (VM4)
 #
-# Creates VM3 (vm-kong) in the existing Phase 2 VNet and deploys Kong Gateway
-# in DB-less mode with:
-#   - Rate limiting on the Joke API (5 req/min)
-#   - HTTPS with a self-signed TLS certificate (IP SAN)
-#   - Declarative routing: /joke/* → VM1:3001, /submit/* → VM2:3002
+# Creates:
+#   VM3 (vm-moderate) -- moderate-service with Auth0 OIDC
+#   VM4 (vm-kong)     -- Kong Gateway in DB-less mode with:
+#     - Rate limiting on the Joke API (5 req/min)
+#     - HTTPS with a self-signed TLS certificate (IP SAN)
+#     - Declarative routing for all services
 #
 # Prerequisites:
 #   1. Phase 2 is running (rg-co3404-jokes, vnet-jokes, VM1, VM2)
 #   2. Azure CLI logged in:   az login
 #   3. Terraform installed:   brew install terraform
 #   4. SSH key exists:        ~/.ssh/co3404_key + ~/.ssh/co3404_key.pub
+#   5. Auth0 app created:     Regular Web Application with callback URLs set
 #
 # Usage:
 #   cd infra/terraform
 #   cp terraform.tfvars.example terraform.tfvars
-#   # Edit terraform.tfvars — set subscription_id and my_ip
+#   # Edit terraform.tfvars -- set subscription_id, my_ip, auth0 credentials
 #   terraform init
 #   terraform apply
 # =============================================================================
@@ -68,6 +70,7 @@ locals {
   kong_config = templatefile("${path.module}/kong.yml.tpl", {
     vm1_private_ip        = var.vm1_private_ip
     vm2_private_ip        = var.vm2_private_ip
+    vm3_private_ip        = var.vm3_private_ip
     rate_limit_per_minute = var.rate_limit_per_minute
   })
 }
@@ -80,7 +83,199 @@ resource "local_file" "kong_config" {
 }
 
 # =============================================================================
-# NSG — Kong VM (HTTPS + SSH only)
+# NSG -- Moderate VM3 (SSH from my_ip + port 3300 from Kong only)
+# =============================================================================
+
+resource "azurerm_network_security_group" "nsg_moderate" {
+  name                = "nsg-moderate"
+  location            = data.azurerm_resource_group.rg.location
+  resource_group_name = data.azurerm_resource_group.rg.name
+
+  security_rule {
+    name                       = "Allow-SSH"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+    source_address_prefix      = var.my_ip
+    destination_address_prefix = "*"
+  }
+
+  # Allow Kong (VM4) to reach the moderate service
+  security_rule {
+    name                       = "Allow-Moderate-From-Kong"
+    priority                   = 200
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "3300"
+    source_address_prefix      = "10.0.1.0/24"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "Deny-All"
+    priority                   = 4096
+    direction                  = "Inbound"
+    access                     = "Deny"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+}
+
+resource "azurerm_public_ip" "pip_moderate" {
+  name                = "pip-moderate"
+  location            = data.azurerm_resource_group.rg.location
+  resource_group_name = data.azurerm_resource_group.rg.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+resource "azurerm_network_interface" "nic_moderate" {
+  name                = "nic-moderate"
+  location            = data.azurerm_resource_group.rg.location
+  resource_group_name = data.azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "ipconfig-moderate"
+    subnet_id                     = data.azurerm_subnet.subnet.id
+    private_ip_address_allocation = "Static"
+    private_ip_address            = var.vm3_private_ip
+    public_ip_address_id          = azurerm_public_ip.pip_moderate.id
+  }
+}
+
+resource "azurerm_network_interface_security_group_association" "nic_nsg_moderate" {
+  network_interface_id      = azurerm_network_interface.nic_moderate.id
+  network_security_group_id = azurerm_network_security_group.nsg_moderate.id
+}
+
+# =============================================================================
+# VM3 -- Moderate Service (Ubuntu 22.04 LTS)
+# =============================================================================
+
+resource "azurerm_linux_virtual_machine" "vm_moderate" {
+  name                = "vm-moderate"
+  resource_group_name = data.azurerm_resource_group.rg.name
+  location            = data.azurerm_resource_group.rg.location
+  size                = "Standard_B1s"
+  admin_username      = "azureuser"
+
+  network_interface_ids = [
+    azurerm_network_interface.nic_moderate.id
+  ]
+
+  admin_ssh_key {
+    username   = "azureuser"
+    public_key = file(pathexpand(var.ssh_public_key_path))
+  }
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "StandardSSD_LRS"
+    disk_size_gb         = 30
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts-gen2"
+    version   = "latest"
+  }
+
+  depends_on = [
+    azurerm_network_interface_security_group_association.nic_nsg_moderate
+  ]
+}
+
+resource "null_resource" "install_docker_moderate" {
+  depends_on = [azurerm_linux_virtual_machine.vm_moderate]
+
+  triggers = {
+    vm_id = azurerm_linux_virtual_machine.vm_moderate.id
+  }
+
+  connection {
+    type        = "ssh"
+    host        = azurerm_public_ip.pip_moderate.ip_address
+    user        = "azureuser"
+    private_key = file(pathexpand(var.ssh_private_key_path))
+    timeout     = "10m"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "echo 'Waiting for VM to finish booting...' && sleep 30",
+      "sudo apt-get update -qq",
+      "sudo apt-get install -y -qq ca-certificates curl gnupg",
+      "sudo install -m 0755 -d /etc/apt/keyrings",
+      "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg",
+      "sudo chmod a+r /etc/apt/keyrings/docker.gpg",
+      "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable\" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null",
+      "sudo apt-get update -qq",
+      "sudo apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin",
+      "sudo usermod -aG docker azureuser",
+      "sudo systemctl enable docker",
+      "sudo systemctl start docker",
+      "mkdir -p /home/azureuser/moderate",
+      "echo 'Docker installed on VM3 (moderate) success'"
+    ]
+  }
+}
+
+resource "null_resource" "deploy_moderate" {
+  depends_on = [null_resource.install_docker_moderate]
+
+  triggers = {
+    vm_id        = azurerm_linux_virtual_machine.vm_moderate.id
+    docker_image = var.moderate_docker_image
+  }
+
+  connection {
+    type        = "ssh"
+    host        = azurerm_public_ip.pip_moderate.ip_address
+    user        = "azureuser"
+    private_key = file(pathexpand(var.ssh_private_key_path))
+    timeout     = "10m"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/../vm3-compose.yml"
+    destination = "/home/azureuser/moderate/docker-compose.yml"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      # Write .env file from Terraform variables
+      "cat > /home/azureuser/moderate/.env << 'ENVEOF'",
+      "DOCKER_IMAGE=${var.moderate_docker_image}",
+      "RABBITMQ_HOST=10.0.1.5",
+      "RABBITMQ_USER=guest",
+      "RABBITMQ_PASSWORD=guest",
+      "AUTH0_SECRET=${var.auth0_secret}",
+      "AUTH0_BASE_URL=https://${azurerm_public_ip.pip_kong.ip_address}",
+      "AUTH0_CLIENT_ID=${var.auth0_client_id}",
+      "AUTH0_CLIENT_SECRET=${var.auth0_client_secret}",
+      "AUTH0_ISSUER_BASE_URL=${var.auth0_issuer_base_url}",
+      "ENVEOF",
+      "cd /home/azureuser/moderate",
+      "sudo docker compose pull",
+      "sudo docker compose up -d",
+      "sleep 10",
+      "sudo docker compose ps",
+      "echo 'Moderate service running on VM3 success'"
+    ]
+  }
+}
+
+# =============================================================================
+# NSG -- Kong VM (HTTPS + SSH only)
 # =============================================================================
 
 resource "azurerm_network_security_group" "nsg_kong" {

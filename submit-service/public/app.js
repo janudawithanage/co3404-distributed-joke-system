@@ -85,7 +85,7 @@ async function submitJoke() {
 
     if (res.ok) {
       showAlert(
-        '✅ Joke queued! The ETL service will write it to the database shortly.',
+        '✅ Joke queued for moderation! A moderator will review it before it enters the database.',
         'success'
       );
       document.getElementById('setup').value     = '';

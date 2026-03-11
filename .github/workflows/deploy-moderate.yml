@@ -1,0 +1,116 @@
+# =============================================================================
+# .github/workflows/deploy-moderate.yml
+#
+# CD Pipeline: Build + push moderate-service Docker image, then deploy to VM3.
+#
+# Triggers on push to main branch when files under moderate-service/ change.
+#
+# Required GitHub Secrets (Settings -> Secrets -> Actions):
+#   DOCKER_HUB_USERNAME   - Docker Hub username
+#   DOCKER_HUB_TOKEN      - Docker Hub access token (not password)
+#   VM3_HOST              - Public IP address of VM3 (moderate VM)
+#   VM3_SSH_PRIVATE_KEY   - PEM-encoded SSH private key for azureuser@VM3
+#
+# The deployed image tag is always the short commit SHA, plus 'latest'.
+# =============================================================================
+
+name: Deploy Moderate Service
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "moderate-service/**"
+      - ".github/workflows/deploy-moderate.yml"
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/moderate-service
+
+jobs:
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.sha_tag }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Generate image tags
+        id: meta
+        run: |
+          SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "sha_tag=${{ env.IMAGE_NAME }}:${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=${{ env.IMAGE_NAME }}:latest"    >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./moderate-service
+          file:    ./moderate-service/Dockerfile
+          push:    true
+          tags: |
+            ${{ steps.meta.outputs.sha_tag }}
+            ${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+  deploy:
+    name: Deploy to VM3
+    runs-on: ubuntu-latest
+    needs:   build-and-push
+    environment: production
+
+    steps:
+      - name: Deploy to VM3 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:        ${{ secrets.VM3_HOST }}
+          username:    azureuser
+          key:         ${{ secrets.VM3_SSH_PRIVATE_KEY }}
+          timeout:     60s
+          script: |
+            cd /home/azureuser/moderate
+
+            # Pull the new image
+            sudo docker compose pull moderate-service
+
+            # Recreate the container with zero-downtime restart
+            # (container is replaced; new one starts before old one stops)
+            sudo docker compose up -d --force-recreate moderate-service
+
+            # Remove dangling images to free disk space
+            sudo docker image prune -f
+
+            echo "Deployed ${{ needs.build-and-push.outputs.image_tag }} to VM3 successfully"
+
+      - name: Health check
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.VM3_HOST }}
+          username: azureuser
+          key:      ${{ secrets.VM3_SSH_PRIVATE_KEY }}
+          script: |
+            # Wait up to 30s for the service to become healthy
+            for i in $(seq 1 6); do
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3300/health || echo "000")
+              echo "Attempt $i: HTTP $STATUS"
+              if [ "$STATUS" = "200" ]; then
+                echo "Health check passed"
+                exit 0
+              fi
+              sleep 5
+            done
+            echo "Health check FAILED after 30s"
+            exit 1

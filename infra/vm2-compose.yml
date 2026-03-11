@@ -1,20 +1,20 @@
 # =====================================================================
-# VM2 Docker Compose — submit-vm (Standard_B1s, 10.0.1.5)
+# VM2 Docker Compose -- submit-vm (Standard_B1s, 10.0.1.5)
 # =====================================================================
 # Services on this VM:
-#   rabbitmq       – message broker (AMQP 5672 VNet-only, UI 15672 restricted)
-#   submit-service – REST API + submit frontend (public port 3002)
+#   rabbitmq       - message broker (AMQP 5672 VNet-only, UI 15672 restricted)
+#   submit-service - REST API + submit frontend (public port 3200)
 #
 # Cross-VM traffic:
-#   Submit → Joke service on VM1  via JOKE_SERVICE_URL=http://10.0.1.4:3000
-#   ETL (on VM1) → RabbitMQ here  via AMQP port 5672 (NSG VirtualNetwork tag)
+#   ETL (on VM1)      -> RabbitMQ here via AMQP port 5672 (VNet only)
+#   Moderate (on VM3) -> RabbitMQ here via AMQP port 5672 (VNet only)
 #
-# Networking:
-#   Both services share the "vm2_network" Docker bridge.
-#   RabbitMQ ports:
-#     5672  – host-bound but NSG blocks internet; only VNet peers reach it
-#     15672 – host-bound but NSG restricts to your IP only
-#   Submit port 3002 – public (NSG Allow-SubmitAPI)
+# Option 4 changes:
+#   - submit-service no longer proxies /types to joke-service via HTTP
+#   - Types are delivered via ECST (Event-Carried State Transfer):
+#     ETL publishes type_update fanout events after new type insertion
+#     submit-service subscribes to sub_type_update queue and writes cache
+#   - JOKE_SERVICE_URL env var removed (no longer needed)
 # =====================================================================
 
 services:
@@ -54,14 +54,11 @@ services:
       retries:  10
       start_period: 30s
 
-  # ─────────────────────────────────────────────────────────────────
-  # Submit Service — public REST API + frontend + Swagger
+  # Submit Service -- public REST API + frontend + Swagger
   #
-  # JOKE_SERVICE_URL points to VM1's private IP:3001 so that
-  # GET /types can proxy to the Joke service and populate the cache.
-  # The cache file lives on the "type_cache" named volume, so it
-  # persists across container restarts (fallback when VM1 is down).
-  # ─────────────────────────────────────────────────────────────────
+  # Option 4: /types is served from ECST cache (no HTTP proxy to joke-service).
+  # The cache is populated automatically when ETL publishes type_update events
+  # to the sub_type_update queue that submit-service subscribes to.
   submit-service:
     build: ./submit-service
     container_name: jokes_submit_service
@@ -69,7 +66,6 @@ services:
       RABBITMQ_HOST:     rabbitmq      # internal Docker DNS (same vm2_network)
       RABBITMQ_USER:     ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
-      JOKE_SERVICE_URL:  ${JOKE_SERVICE_URL}   # http://10.0.1.4:3000 (VM1 private, joke-service host port)
       PORT:              4200
     ports:
       - "3200:4200"

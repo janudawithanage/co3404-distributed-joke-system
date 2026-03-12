@@ -128,8 +128,9 @@ services:
   # Human moderators review jokes before they enter the database.
   # Authentication handled inside the service via Auth0 OIDC.
   #
-  # IMPORTANT: AUTH0_BASE_URL on VM2 must be set to https://85.211.240.162
-  #            Auth0 Allowed Callback URL: https://85.211.240.162/callback
+  # IMPORTANT: AUTH0_BASE_URL on VM2 must be set to https://85.211.240.162  (no path suffix)
+  #            Auth0 Allowed Callback URL:    https://85.211.240.162/callback
+  #            Auth0 Allowed Logout URL:      https://85.211.240.162/moderate-ui
   #
   # GET  /moderate-ui  -> Moderation UI (HTML frontend)
   # GET  /moderate     -> Pull next joke from queue (API, Auth0 protected)
@@ -178,8 +179,13 @@ services:
   # ---------------------------------------------------------------------------
   # RabbitMQ Management UI - VM2 (10.0.1.5:15672)
   #
-  # GET /mq-admin -> RabbitMQ Management UI (guest/guest)
-  # strip_path:true strips /mq-admin so RabbitMQ receives requests at /
+  # The management UI is a SPA that:
+  #   - loads at /mq-admin/   (trailing slash required — strip_path removes prefix)
+  #   - fetches static assets at /mq-admin/js/, /mq-admin/img/ etc
+  #   - makes API calls to absolute /api/... paths
+  # Route /mq-admin handles the page + static assets (strip_path=true).
+  # Route /api handles the SPA's absolute API calls (strip_path=false).
+  # Access: https://85.211.240.162/mq-admin/  credentials: guest / guest
   # ---------------------------------------------------------------------------
   - name: rabbitmq-management
     url:             http://10.0.1.5:15672
@@ -192,6 +198,12 @@ services:
       - name:          mq-admin-route
         paths:         [/mq-admin]
         strip_path:    true
+        preserve_host: false
+        methods:       [GET, HEAD, POST, PUT, DELETE, OPTIONS]
+
+      - name:          mq-api-route
+        paths:         [/api]
+        strip_path:    false
         preserve_host: false
         methods:       [GET, HEAD, POST, PUT, DELETE, OPTIONS]
 

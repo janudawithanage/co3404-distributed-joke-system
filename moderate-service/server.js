@@ -34,7 +34,7 @@ const path    = require('path');
 const fs      = require('fs').promises;
 
 const { connect, getNextJoke, approveJoke, rejectJoke, isReady } = require('./rabbitmq');
-const { auth, buildAuthConfig, requiresAuth, requiresAuthJson }  = require('./auth');
+const { auth, buildAuthConfig, requiresAuth, requiresAuthJson, AUTH_ENABLED }  = require('./auth');
 
 const app  = express();
 const PORT = process.env.PORT || 4300;
@@ -58,15 +58,33 @@ app.use(express.json());
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OIDC Middleware (Auth0 express-openid-connect)
-// Must be mounted before route definitions.
-// Attaches req.oidc to every request.
+// Only active when AUTH0_CLIENT_ID + AUTH0_ISSUER_BASE_URL + AUTH0_SECRET are set.
+// Without them the service runs in "no-auth" mode: all requests are treated as
+// authenticated with a placeholder user so the core moderate flow still works.
 // ─────────────────────────────────────────────────────────────────────────────
-app.use(auth(buildAuthConfig(PORT)));
+if (AUTH_ENABLED) {
+  console.log('[Auth] Auth0 OIDC enabled — baseURL:', process.env.AUTH0_BASE_URL);
+  app.use(auth(buildAuthConfig(PORT)));
+} else {
+  console.warn('[Auth] Auth0 NOT configured — running in unauthenticated mode. Set AUTH0_* env vars to enable.');
+  // Inject mock oidc so requiresAuth/requiresAuthJson middleware still pass
+  app.use((req, _res, next) => {
+    req.oidc = {
+      isAuthenticated: () => true,
+      user: { name: 'Moderator (Auth Disabled)', email: 'moderator@local', picture: null }
+    };
+    next();
+  });
+  // Stub OIDC routes so Kong's moderate-auth-route returns 302 instead of 404
+  app.get('/login',    (_req, res) => res.redirect('/moderate-ui'));
+  app.get('/logout',   (_req, res) => res.redirect('/moderate-ui'));
+  app.get('/callback', (_req, res) => res.redirect('/moderate-ui'));
+}
 
 // Serve static files from /public
-// Also serve at /moderate/ prefix for Kong path-based routing (strip_path: false)
+// Kong routes /moderate-ui with strip_path:true, so the service always receives /
+// Do NOT mount at /moderate — that conflicts with the GET /moderate API endpoint
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/moderate', express.static(path.join(__dirname, 'public')));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /health — public, no auth required

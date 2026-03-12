@@ -8,9 +8,11 @@
  * Environment Variables Required:
  *   AUTH0_SECRET          – long random string for session cookie encryption
  *                           Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
- *   AUTH0_BASE_URL        – public URL of this service
- *                           Local:  http://localhost:4300
- *                           Kong:   https://<KONG_IP>/moderate
+ *   AUTH0_BASE_URL        – public URL of this service (Kong's public URL, NO path suffix)
+ *                           Local:  http://localhost:8000   (Kong proxy port)
+ *                           Kong:   https://<KONG_IP>       (no /moderate suffix!)
+ *                           ⚠ Do NOT add a path suffix — OIDC builds the callback as
+ *                             baseURL + '/callback', so Kong needs a route for '/callback'.
  *   AUTH0_CLIENT_ID       – Auth0 Application Client ID
  *   AUTH0_CLIENT_SECRET   – Auth0 Application Client Secret
  *   AUTH0_ISSUER_BASE_URL – Auth0 Domain URL
@@ -19,11 +21,11 @@
  * Auth0 Dashboard Setup:
  *   1. Create a "Regular Web Application" in Auth0
  *   2. Add Allowed Callback URLs:
- *        http://localhost:4300/callback
- *        https://<KONG_IP>/moderate/callback
+ *        http://localhost:8000/callback
+ *        https://<KONG_IP>/callback
  *   3. Add Allowed Logout URLs:
- *        http://localhost:4300
- *        https://<KONG_IP>/moderate
+ *        http://localhost:8000/moderate-ui
+ *        https://<KONG_IP>/moderate-ui
  *   4. Copy the Client ID, Client Secret, and Domain to your .env
  *
  * Flow:
@@ -37,7 +39,18 @@
 
 'use strict';
 
-const { auth, requiresAuth } = require('express-openid-connect');
+const { auth, requiresAuth: oidcRequiresAuth } = require('express-openid-connect');
+
+/**
+ * Whether Auth0 is configured. All three env vars must be set to enable OIDC.
+ * When false the service runs in "no-auth" mode: all requests are treated as
+ * authenticated using a placeholder local user.
+ */
+const AUTH_ENABLED = !!(
+  process.env.AUTH0_CLIENT_ID &&
+  process.env.AUTH0_ISSUER_BASE_URL &&
+  process.env.AUTH0_SECRET
+);
 
 /**
  * Build the OIDC middleware configuration from environment variables.
@@ -74,9 +87,30 @@ function buildAuthConfig(port) {
     // Route overrides — keep defaults but make them explicit for documentation
     routes: {
       callback:          '/callback',
-      postLogoutRedirect: '/'
+      postLogoutRedirect: '/moderate-ui'  // redirect here after Auth0 logout
     }
   };
+}
+
+/**
+ * Passthrough used when Auth0 is not configured.
+ * Injects a mock req.oidc so requiresAuth/requiresAuthJson still work.
+ */
+function noAuthMiddleware(req, _res, next) {
+  req.oidc = {
+    isAuthenticated: () => true,
+    user: { name: 'Moderator (Auth Disabled)', email: 'moderator@local', picture: null }
+  };
+  next();
+}
+
+/**
+ * Returns a requiresAuth middleware.
+ * When AUTH_ENABLED: uses express-openid-connect's requiresAuth().
+ * When not:         returns the passthrough noAuthMiddleware.
+ */
+function requiresAuth() {
+  return AUTH_ENABLED ? oidcRequiresAuth() : noAuthMiddleware;
 }
 
 /**
@@ -94,4 +128,4 @@ function requiresAuthJson(req, res, next) {
   next();
 }
 
-module.exports = { auth, buildAuthConfig, requiresAuth, requiresAuthJson };
+module.exports = { auth, buildAuthConfig, requiresAuth, requiresAuthJson, AUTH_ENABLED };

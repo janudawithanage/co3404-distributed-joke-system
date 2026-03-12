@@ -121,8 +121,9 @@ services:
   #
   # Auth0 OIDC authentication is handled inside the service (not by Kong).
   #
-  # IMPORTANT: Set AUTH0_BASE_URL to https://<KONG_PUBLIC_IP>
+  # IMPORTANT: Set AUTH0_BASE_URL to https://<KONG_PUBLIC_IP>  (no path suffix)
   #            Add https://<KONG_PUBLIC_IP>/callback to Auth0 Allowed Callbacks
+  #            Add https://<KONG_PUBLIC_IP>/moderate-ui to Auth0 Allowed Logout URLs
   # ---------------------------------------------------------------------------
   - name: moderate-service
     url:              http://${vm2_private_ip}:3004
@@ -165,8 +166,13 @@ services:
   # ---------------------------------------------------------------------------
   # RabbitMQ Management UI - VM2 ($${vm2_private_ip}:15672)
   #
-  # GET /mq-admin -> RabbitMQ Management UI
-  # strip_path:true strips /mq-admin so RabbitMQ receives requests at /
+  # The management UI is a SPA that:
+  #   - loads at /mq-admin/   (trailing slash required — strip_path removes prefix)
+  #   - fetches static assets at /mq-admin/js/, /mq-admin/img/ etc
+  #   - makes API calls to absolute /api/... paths
+  # Route /mq-admin handles the page + static assets (strip_path=true).
+  # Route /api handles the SPA's absolute API calls (strip_path=false).
+  # Access: https://85.211.240.162/mq-admin/  credentials: guest / guest
   # ---------------------------------------------------------------------------
   - name: rabbitmq-management
     url:              http://${vm2_private_ip}:15672
@@ -180,4 +186,10 @@ services:
         paths:          [/mq-admin]
         strip_path:     true
         preserve_host:  false
-        methods:        [GET, POST, PUT, DELETE, OPTIONS]
+        methods:        [GET, POST, PUT, DELETE, OPTIONS, HEAD]
+
+      - name:           mq-api-route
+        paths:          [/api]
+        strip_path:     false
+        preserve_host:  false
+        methods:        [GET, POST, PUT, DELETE, OPTIONS, HEAD]

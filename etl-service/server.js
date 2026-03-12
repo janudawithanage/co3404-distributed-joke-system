@@ -107,6 +107,13 @@ async function startConsumer() {
       await publishCh.assertQueue('mod_type_update', { durable: true });
       await publishCh.bindQueue('mod_type_update', TYPE_EXCHANGE, '');
 
+      // ── Startup broadcast ────────────────────────────────────
+      // Publish the full types list from DB immediately so that
+      // submit-service and moderate-service caches are populated
+      // even when the DB was seeded directly (not via the pipeline).
+      console.log('[ETL] Broadcasting current types on startup…');
+      await publishTypeUpdate(publishCh);
+
       console.log(`[ETL] Waiting for messages on "${MODERATED_QUEUE}"…`);
 
       await new Promise((resolve, reject) => {

@@ -1,6 +1,14 @@
 # CO3404 Distributed Joke System
 
-A distributed microservices application built for the **CO3404 Distributed Systems** module at Ulster University. Users can browse, submit, and moderate jokes through web interfaces backed by a fully decoupled, message-driven architecture deployed on Azure.
+Distributed microservices project for the **CO3404 Distributed Systems** module at Ulster University.
+
+The platform supports:
+- browsing jokes,
+- submitting jokes,
+- human moderation,
+- asynchronous persistence through RabbitMQ.
+
+> Last updated: **13 March 2026**
 
 ---
 
@@ -23,22 +31,21 @@ A distributed microservices application built for the **CO3404 Distributed Syste
 
 ```
 Browser / curl
-      |
-      v  HTTPS (443) / HTTP (80)
+  |
+  v  HTTPS (443) / HTTP (80)
 +-----------------------------------+
-|   Kong API Gateway  (VM4)         |  -- TLS termination, routing,
-|   10.0.1.6  :443/:80              |     rate limiting, correlation IDs
-+----------+------------------------+
-           | private Azure VNet (10.0.1.x)
-     +-----+--------------------+
-     v                          v
-  VM1 (10.0.1.4)          VM2 (10.0.1.5)
-  +------------------+    +---------------------+
-  |Joke Service :3001|    |Submit Service  :3002 |
-  |ETL Service       |    |Moderate Service:3004 |
-  |  (internal)      |    |RabbitMQ  :5672/:15672|
-  |MySQL :3306       |    +---------------------+
-  +------------------+
+| Kong API Gateway (VM4)            |
+| TLS termination, routing, plugins |
++----------------+------------------+
+         | private Azure VNet (10.0.1.x)
+   +-------------+--------------+----------------+
+   v                            v                v
+VM1 (10.0.1.4)            VM2 (10.0.1.5)   VM3 (10.0.1.7)
++------------------+      +---------------+ +----------------+
+| Joke Service     |      | Submit Service| | Moderate Service|
+| ETL Service      |      | RabbitMQ      | | (Auth0 OIDC)    |
+| MySQL            |      +---------------+ +----------------+
++------------------+
 ```
 
 ### Message / Event Flow
@@ -63,32 +70,34 @@ Browser --> POST /submit --> submit-service --> "submit" queue --> moderate-serv
 | **MySQL** | VM1 :3306 | Relational store for joke types and jokes |
 | **Submit Service** | VM2 :3002 | Accepts new jokes; publishes to `submit` queue; Swagger docs |
 | **RabbitMQ** | VM2 :5672 | Message broker: `submit`, `moderated`, `type_update` fanout exchange |
-| **Moderate Service** | VM2 :3004 | Auth0 OIDC-protected UI; reviewer approves/rejects queued jokes |
+| **Moderate Service** | VM3 :3300 | Auth0 OIDC-protected UI; reviewer approves/rejects queued jokes |
 | **Kong** | VM4 :443/80 | DB-less API gateway: TLS, rate-limiting, correlation IDs |
 
 ---
 
 ## Hosted Links (Azure)
 
-> All public traffic goes through **Kong** only. Kong uses a self-signed certificate — add `-k` to any `curl` command, or install `infra/kong/certs/server.crt` into your system keychain.
-
-**Kong Base URL:** `https://85.211.240.162`
-
-> ⚠️ Azure VMs may be deallocated to save costs. If unreachable, start them:
+> All public traffic should go through **Kong** (VM4).
+>
+> Get the current Kong public IP from Terraform outputs:
+>
 > ```bash
-> az vm start -g rg-co3404-jokes -n vm-joke
-> az vm start -g rg-co3404-jokes -n vm-submit
-> az vm start -g rg-co3404-jokes -n vm-kong
+> cd infra/terraform
+> terraform output
 > ```
+>
+> If TLS is self-signed, use `curl -k`.
+
+**Kong Base URL:** `https://<KONG_PUBLIC_IP>`
 
 ### Web UIs
 
 | URL | Description |
 |---|---|
-| `https://85.211.240.162/joke-ui` | Joke Machine — browse jokes |
-| `https://85.211.240.162/submit` | Submit a joke |
-| `https://85.211.240.162/moderate-ui` | Moderate jokes (Auth0 login required) |
-| `https://85.211.240.162/docs` | Swagger / OpenAPI interactive docs |
+| `https://<KONG_PUBLIC_IP>/joke-ui` | Joke Machine — browse jokes |
+| `https://<KONG_PUBLIC_IP>/submit` | Submit a joke |
+| `https://<KONG_PUBLIC_IP>/moderate-ui` | Moderate jokes (Auth0 login required) |
+| `https://<KONG_PUBLIC_IP>/docs` | Swagger / OpenAPI interactive docs |
 
 ### API Endpoints (via Kong)
 
@@ -102,11 +111,12 @@ Browser --> POST /submit --> submit-service --> "submit" queue --> moderate-serv
 | `GET` | `/moderate` | Moderation API (Auth0 protected) |
 | `POST` | `/moderated` | Approve a joke (Auth0 session required) |
 | `POST` | `/reject` | Reject a joke (Auth0 session required) |
+| `GET` | `/me` | Returns authenticated moderator profile |
 
 ### Quick Test Commands (Azure)
 
 ```bash
-export KONG_IP=85.211.240.162
+export KONG_IP=<KONG_PUBLIC_IP>
 
 curl -sk https://$KONG_IP/types
 curl -sk https://$KONG_IP/joke/programming
@@ -155,12 +165,17 @@ After running `docker compose up -d`:
 | http://localhost:3200/health | Submit Service | Health check |
 | http://localhost:3300 | Moderate Service | host 3300 -> container 4300 |
 | http://localhost:3300/health | Moderate Service | Health check |
+| http://localhost:3001/health | ETL Service | Health check |
 | http://localhost:15672 | RabbitMQ | Management UI (guest / guest) |
+| http://localhost:8000/mq-admin/ | RabbitMQ | Management UI via Kong |
 | localhost:3306 | MySQL | jokeuser / jokepassword |
 
 > **Azure direct access** (bypassing Kong):
-> - VM1 public IP `85.211.178.130` — joke-service on port 3001
-> - VM2 public IP `85.211.241.251` — submit on 3002, moderate on 3004, RabbitMQ on 15672
+> - VM1 public IP — joke-service and ETL
+> - VM2 public IP — submit-service and RabbitMQ
+> - VM3 public IP — moderate-service
+>
+> Use `terraform output` from `infra/terraform` to get current IPs.
 
 ---
 
@@ -219,7 +234,7 @@ curl http://localhost:8000/joke/programming
 
 1. Create a free Auth0 account and a Regular Web Application
 2. Set Allowed Callback URLs: `http://localhost:8000/callback`
-3. Set Allowed Logout URLs: `http://localhost:8000`
+3. Set Allowed Logout URLs: `http://localhost:8000/moderate-ui`
 4. Add to `.env`:
 
 ```
@@ -430,6 +445,7 @@ Copy `.env.example` to `.env`. Defaults work for local development except Auth0 
 
 - **Moderation before persistence.** Submitted jokes enter `submit` queue -> moderate-service. Only approved jokes reach `moderated` queue -> ETL -> DB. Rejected jokes are nack'd (requeue=false).
 - **Auth0 OIDC.** `express-openid-connect` with `authRequired: false`. API routes use `requiresAuthJson()` returning 401 JSON. Browser routes use `requiresAuth()` for redirect flow.
+- **Auth fallback mode.** If `AUTH0_*` variables are missing, moderate-service runs in unauthenticated local mode with a mock user so queue workflow can still be tested.
 - **ECST (Event-Carried State Transfer).** ETL publishes to `type_update` fanout exchange after each new type insertion. Submit (`sub_type_update`) and Moderate (`mod_type_update`) services cache the type list locally, removing HTTP polling dependency on joke-service.
 - **At-least-once delivery.** ETL acks `moderated` messages only after confirmed DB write. Moderate acks `submit` messages only after forwarding to `moderated` queue.
 - **Idempotent type inserts.** MySQL uses `INSERT IGNORE`; MongoDB uses `findOneAndUpdate` with `upsert:true` and `$setOnInsert`.
@@ -441,5 +457,3 @@ Copy `.env.example` to `.env`. Defaults work for local development except Auth0 
 ---
 
 ## Module
-
-**CO3404 Distributed Systems** -- Ulster University

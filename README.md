@@ -8,7 +8,7 @@ The platform supports:
 - human moderation,
 - asynchronous persistence through RabbitMQ.
 
-> Last updated: **13 March 2026**
+> Last updated: **28 March 2026**
 
 ---
 
@@ -23,6 +23,8 @@ The platform supports:
 - [Project Structure](#project-structure)
 - [Database Schema](#database-schema)
 - [Environment Variables](#environment-variables)
+- [Secrets / API Keys](#secrets--api-keys)
+- [Queues & Exchanges](#queues--exchanges)
 - [Key Design Decisions](#key-design-decisions)
 
 ---
@@ -72,6 +74,19 @@ Browser --> POST /submit --> submit-service --> "submit" queue --> moderate-serv
 | **RabbitMQ** | VM2 :5672 | Message broker: `submit`, `moderated`, `type_update` fanout exchange |
 | **Moderate Service** | VM3 :3300 | Auth0 OIDC-protected UI; reviewer approves/rejects queued jokes |
 | **Kong** | VM4 :443/80 | DB-less API gateway: TLS, rate-limiting, correlation IDs |
+
+### Service Overview (local ports)
+
+| Service | Host port(s) | Key endpoints | Notes |
+|---|---|---|---|
+| Joke Service | 3000 -> 4000 | `/joke/:type`, `/types`, `/health`, `/joke-ui` | Reads from MySQL (default) or MongoDB |
+| Submit Service | 3200 -> 4200 | `POST /submit`, `GET /types`, `/docs`, `/health`, `/submit` | Publishes to `submit` queue; uses ECST cache |
+| Moderate Service | 3300 -> 4300 | `GET /moderate`, `POST /moderated`, `POST /reject`, `/types`, `/me`, `/health`, `/moderate-ui` | Auth0 OIDC (optional fallback) |
+| ETL Service | 3001 -> 4001 | `/health` | Consumes `moderated`; writes to DB; emits `type_update` |
+| RabbitMQ | 5672, 15672 | AMQP; `http://localhost:15672` | Default creds `guest/guest` |
+| Kong Gateway | 8000 -> 80 | Proxy all APIs and UIs | DB-less; uses `infra/kong/kong.local.yml` |
+| MySQL | 3306 | MySQL protocol | Enabled when `DB_TYPE=mysql` |
+| MongoDB | 27017 | Mongo protocol | Enabled when `DB_TYPE=mongo` |
 
 ---
 
@@ -441,6 +456,27 @@ Copy `.env.example` to `.env`. Defaults work for local development except Auth0 
 
 ---
 
+## Secrets / API Keys
+
+- Keep real keys in `.env` (or env vars in your shell/CI). `.env` is already ignored by git.
+- Share **only** placeholders in `.env.example`; never commit real values.
+- For production, set secrets as environment variables or CI/CD secrets (see GitHub Actions variables listed in [How to Run on Azure](#how-to-run-on-azure)).
+- If a secret was committed, rotate it immediately and force-push without the secret in history if policy allows.
+
+---
+
+## Queues & Exchanges
+
+| Name | Type | Producer(s) | Consumer(s) | Purpose |
+|---|---|---|---|---|
+| `submit` | Queue | submit-service | moderate-service | Pending jokes awaiting human review |
+| `moderated` | Queue | moderate-service | etl-service | Approved jokes ready for persistence |
+| `type_update` | Fanout exchange | etl-service | `sub_type_update`, `mod_type_update` queues | ECST broadcast carrying the full type list |
+| `sub_type_update` | Queue (bound to `type_update`) | etl-service | submit-service | Refresh submit-service cache after new type creation |
+| `mod_type_update` | Queue (bound to `type_update`) | etl-service | moderate-service | Refresh moderate-service cache after new type creation |
+
+---
+
 ## Key Design Decisions
 
 - **Moderation before persistence.** Submitted jokes enter `submit` queue -> moderate-service. Only approved jokes reach `moderated` queue -> ETL -> DB. Rejected jokes are nack'd (requeue=false).
@@ -454,6 +490,3 @@ Copy `.env.example` to `.env`. Defaults work for local development except Auth0 
 - **Kong as the single origin.** VM1, VM2, VM3 are not publicly reachable. All routing, TLS, and rate limiting is enforced at Kong (VM4).
 - **CI/CD for moderate-service.** GitHub Actions builds Docker image, pushes to Docker Hub, and SSH-deploys to VM3 via `docker compose pull && up --force-recreate` on every push to main.
 
----
-
-## Module

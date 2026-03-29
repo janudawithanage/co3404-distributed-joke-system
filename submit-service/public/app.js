@@ -8,13 +8,21 @@
 
 'use strict';
 
+const cfg = window.APP_CONFIG || {};
+const gatewayBase = (cfg.gatewayBase || cfg.azureBase || cfg.localBase || window.location.origin || '').replace(/\/$/, '');
+
+function withBase(path) {
+  if (!path.startsWith('/')) path = `/${path}`;
+  return `${gatewayBase}${path}`;
+}
+
 /* ── Load joke types ─────────────────────────────────────── */
 async function loadTypes() {
   const sel    = document.getElementById('typeSelect');
   const custom = document.getElementById('typeCustom');
 
   try {
-    const res   = await fetch('/types');
+    const res   = await fetch(withBase('/types'));
     const types = await res.json();
 
     sel.innerHTML = '';
@@ -76,7 +84,7 @@ async function submitJoke() {
   btn.textContent    = 'Submitting…';
 
   try {
-    const res  = await fetch('/submit', {
+    const res  = await fetch(withBase('/submit'), {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ setup, punchline, type })
@@ -97,7 +105,7 @@ async function submitJoke() {
     showAlert('❌ Network error – could not reach the Submit Service.', 'error');
   } finally {
     btn.disabled    = false;
-    btn.textContent = 'Submit Joke';
+    btn.textContent    = 'Submit to queue';
   }
 }
 

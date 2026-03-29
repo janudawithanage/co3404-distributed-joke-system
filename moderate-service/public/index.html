@@ -3,194 +3,74 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- base href ensures relative assets (app.js) resolve correctly when
+       accessed via Kong (which strips /moderate-ui but keeps the browser URL). -->
   <base href="/moderate-ui/" />
-  <title>CO3404 – Joke Moderator</title>
+  <title>Moderate · Luxe</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg:           #0f172a;
-      --surface:      #1e293b;
-      --surface2:     #334155;
-      --accent:       #f59e0b;
-      --accent-hover: #d97706;
-      --approve:      #10b981;
-      --approve-h:    #059669;
-      --reject:       #ef4444;
-      --reject-h:     #dc2626;
-      --text:         #f1f5f9;
-      --muted:        #94a3b8;
-      --radius:       12px;
+      --bg: #0a0f1d;
+      --surface: rgba(255,255,255,0.04);
+      --card: rgba(255,255,255,0.06);
+      --stroke: rgba(255,255,255,0.08);
+      --accent: #5ce1e6;
+      --approve: #7cf6c4;
+      --reject: #ff6b6b;
+      --text: #e7eefb;
+      --muted: #95a4c7;
     }
-
     * { box-sizing: border-box; margin: 0; padding: 0; }
-
     body {
-      background: var(--bg);
-      color:      var(--text);
-      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: radial-gradient(circle at 10% 20%, rgba(92,225,230,0.12), transparent 30%), var(--bg);
+      color: var(--text);
+      font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif;
       min-height: 100vh;
-      display:    flex;
+      padding: 28px 16px 40px;
+      display: flex;
       flex-direction: column;
-      align-items:    center;
-      padding:    2rem 1rem;
+      align-items: center;
+      gap: 18px;
     }
-
     header {
-      text-align: center;
-      margin-bottom: 2.5rem;
       width: 100%;
-      max-width: 600px;
+      max-width: 760px;
       display: flex;
       justify-content: space-between;
+      gap: 16px;
       align-items: center;
     }
-    .header-left h1 { font-size: 1.9rem; color: var(--accent); }
-    .header-left p  { color: var(--muted); font-size: 0.85rem; margin-top: 0.3rem; }
-
-    .user-info {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-      background: var(--surface);
-      border-radius: var(--radius);
-      padding: 0.5rem 1rem;
-    }
+    .header-left h1 { font-size: 32px; letter-spacing: -0.01em; }
+    .header-left p { color: var(--muted); margin-top: 6px; }
+    .user-info { display: flex; gap: 10px; align-items: center; background: var(--card); border: 1px solid var(--stroke); padding: 10px 12px; border-radius: 14px; }
     .user-info img { width: 32px; height: 32px; border-radius: 50%; }
-    .user-info span { font-size: 0.85rem; color: var(--muted); }
-    .logout-btn {
-      font-size: 0.75rem;
-      color: var(--reject);
-      background: none;
-      border: 1px solid var(--reject);
-      border-radius: 6px;
-      padding: 0.2rem 0.6rem;
-      cursor: pointer;
-    }
-    .logout-btn:hover { background: var(--reject); color: white; }
+    .logout-btn { border: 1px solid var(--stroke); background: transparent; color: var(--text); padding: 6px 10px; border-radius: 10px; cursor: pointer; }
 
-    /* ── Status Banner ─────────────────────────────────────────── */
-    #status-banner {
-      width: 100%;
-      max-width: 600px;
-      background: var(--surface);
-      border-radius: var(--radius);
-      padding: 1.5rem 2rem;
-      text-align: center;
-      color: var(--muted);
-      margin-bottom: 1.5rem;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 0.75rem;
-    }
-    .spinner {
-      width: 20px; height: 20px;
-      border: 3px solid var(--surface2);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
+    #status-banner { max-width: 760px; width: 100%; background: var(--card); border: 1px solid var(--stroke); border-radius: 16px; padding: 16px 18px; display: flex; align-items: center; gap: 12px; color: var(--muted); }
+    .spinner { width: 18px; height: 18px; border: 3px solid rgba(255,255,255,0.08); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* ── Moderation Card ───────────────────────────────────────── */
-    .mod-card {
-      background:     var(--surface);
-      border-radius:  var(--radius);
-      padding:        2rem;
-      width:          100%;
-      max-width:      600px;
-      display:        flex;
-      flex-direction: column;
-      gap:            1.3rem;
-      display: none;
-    }
+    .mod-card { width: 100%; max-width: 760px; background: var(--card); border: 1px solid var(--stroke); border-radius: 18px; padding: 20px; display: none; flex-direction: column; gap: 14px; }
     .mod-card.visible { display: flex; }
 
-    .field-group { display: flex; flex-direction: column; gap: 0.4rem; }
-    .field-group label {
-      color: var(--muted);
-      font-size: 0.78rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
+    .field-group { display: flex; flex-direction: column; gap: 6px; }
+    .field-group label { color: var(--muted); font-size: 13px; letter-spacing: 0.03em; }
+    textarea, input[type="text"], select { background: rgba(255,255,255,0.04); border: 1px solid var(--stroke); color: var(--text); padding: 12px; border-radius: 12px; font-size: 15px; font-family: inherit; }
+    textarea { min-height: 90px; resize: vertical; }
+    textarea:focus, input:focus, select:focus { outline: 2px solid rgba(92,225,230,0.4); border-color: rgba(92,225,230,0.8); }
 
-    textarea, input[type="text"], select {
-      background:    var(--surface2);
-      border:        1px solid #475569;
-      color:         var(--text);
-      border-radius: 8px;
-      padding:       0.65rem 0.9rem;
-      font-size:     0.95rem;
-      width:         100%;
-      resize:        vertical;
-      font-family:   inherit;
-    }
-    textarea:focus, input:focus, select:focus {
-      outline: none;
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(245,158,11,0.15);
-    }
-    textarea { min-height: 80px; }
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    button { padding: 12px; border: none; border-radius: 12px; font-weight: 700; font-size: 15px; cursor: pointer; }
+    .btn-approve { background: var(--approve); color: #04101a; }
+    .btn-reject { background: var(--reject); color: #fff; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
 
-    select option { background: var(--surface2); }
-
-    /* ── Action Buttons ────────────────────────────────────────── */
-    .actions {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1rem;
-      margin-top: 0.5rem;
-    }
-
-    button {
-      padding:       0.75rem 1.5rem;
-      border:        none;
-      border-radius: 8px;
-      font-size:     1rem;
-      font-weight:   600;
-      cursor:        pointer;
-      transition:    background 0.2s, transform 0.1s;
-    }
-    button:active { transform: scale(0.97); }
-
-    .btn-approve {
-      background: var(--approve);
-      color: white;
-    }
-    .btn-approve:hover { background: var(--approve-h); }
-    .btn-approve:disabled { background: #475569; cursor: not-allowed; }
-
-    .btn-reject {
-      background: var(--reject);
-      color: white;
-    }
-    .btn-reject:hover  { background: var(--reject-h); }
-    .btn-reject:disabled { background: #475569; cursor: not-allowed; }
-
-    /* ── Toast ─────────────────────────────────────────────────── */
-    #toast {
-      position: fixed;
-      bottom: 1.5rem;
-      left: 50%;
-      transform: translateX(-50%) translateY(100px);
-      background: var(--surface2);
-      color: var(--text);
-      padding: 0.75rem 1.5rem;
-      border-radius: 8px;
-      font-size: 0.9rem;
-      transition: transform 0.3s ease;
-      z-index: 999;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
-    }
+    #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(120px); background: var(--card); border: 1px solid var(--stroke); padding: 12px 16px; border-radius: 12px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); transition: transform 0.3s ease; }
     #toast.show { transform: translateX(-50%) translateY(0); }
-    #toast.success { border-left: 4px solid var(--approve); }
-    #toast.error   { border-left: 4px solid var(--reject); }
-
-    /* ── Queue Counter ─────────────────────────────────────────── */
-    .queue-info {
-      font-size: 0.8rem;
-      color: var(--muted);
-      text-align: right;
-    }
+    #toast.success { border-color: rgba(124,246,196,0.5); }
+    #toast.error { border-color: rgba(255,107,107,0.5); }
   </style>
 </head>
 <body>

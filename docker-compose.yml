@@ -112,6 +112,10 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME:     ${DB_NAME}
       MONGO_URI:   ${MONGO_URI:-mongodb://admin:mongopassword@mongodb:27017/jokesdb?authSource=admin}
+      # PUBLIC_GATEWAY_BASE: ensures the homepage's JS routes ALL API calls via Kong
+      # (rate limiting, correlation-id headers, etc.) even when the page is opened
+      # directly on port 3000 instead of through Kong on port 8000.
+      PUBLIC_GATEWAY_BASE: ${PUBLIC_GATEWAY_BASE:-http://localhost:8000}
       PORT:        4000
     ports:
       - "3000:4000"

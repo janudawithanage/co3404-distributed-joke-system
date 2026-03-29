@@ -28,6 +28,26 @@ const { connectWithRetry, getJokes, getTypes } = require('./db');
 const app  = express();
 const PORT = process.env.PORT || 4000;
 
+// Shared config for the unified luxury homepage. Values can be overridden
+// via environment variables; otherwise sensible defaults are derived.
+function buildPublicConfig() {
+  const gatewayBase  = process.env.PUBLIC_GATEWAY_BASE || '';
+  const localBase    = process.env.PUBLIC_LOCAL_BASE   || '';
+  const azureBase    = process.env.PUBLIC_AZURE_BASE   || '';
+  const jokeBase     = process.env.PUBLIC_JOKE_BASE    || '';
+  const submitBase   = process.env.PUBLIC_SUBMIT_BASE  || '';
+  const moderateBase = process.env.PUBLIC_MODERATE_BASE || '';
+
+  return {
+    gatewayBase,
+    localBase,
+    azureBase,
+    jokeServiceBase:   jokeBase,
+    submitServiceBase: submitBase,
+    moderateServiceBase: moderateBase
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CORS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -42,6 +62,13 @@ app.use((req, res, next) => {
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/joke-ui', express.static(path.join(__dirname, 'public')));
+
+// Expose runtime configuration to the frontend without baking secrets
+app.get('/config.js', (_req, res) => {
+  res.type('application/javascript').send(
+    `window.APP_CONFIG = ${JSON.stringify(buildPublicConfig())};`
+  );
+});
 
 // ─────────────────────────────────────────────────────────────
 // GET /types

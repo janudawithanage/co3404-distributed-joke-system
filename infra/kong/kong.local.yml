@@ -83,6 +83,18 @@ services:
         preserve_host: false
         methods:       [GET, HEAD, OPTIONS]
 
+      - name:          joke-health-route
+        paths:         [/joke-health]
+        strip_path:    true
+        preserve_host: false
+        methods:       [GET, HEAD]
+
+      - name:          types-from-joke-route
+        paths:         [/joke-types]
+        strip_path:    true
+        preserve_host: false
+        methods:       [GET, HEAD]
+
     plugins:
       - name: rate-limiting
         config:
@@ -134,9 +146,19 @@ services:
         preserve_host: false
         methods:       [GET, HEAD]
 
+    plugins:
+      - name: rate-limiting
+        route: submit-api-route
+        config:
+          minute:              10
+          policy:              local
+          error_code:          429
+          error_message:       "Rate limit exceeded -- Submit API allows 10 req/min. Retry after 60 seconds."
+          hide_client_headers: false
+
   # ---------------------------------------------------------------------------
   # Moderate Service
-  #   LOCAL:  Docker DNS moderator-service:3004
+  #   LOCAL:  Docker DNS moderate-service:4300
   #   HOSTED: http://10.0.1.5:3004
   #
   # Authentication is handled INSIDE the service via Auth0 OIDC.
@@ -150,7 +172,7 @@ services:
   # *    /login /logout /callback  -> Auth0 OIDC flow (express-openid-connect)
   # ---------------------------------------------------------------------------
   - name: moderate-service
-    url:             http://moderator-service:3004
+    url:             http://moderate-service:4300
     connect_timeout: 5000
     read_timeout:    15000
     write_timeout:   10000
@@ -218,3 +240,22 @@ services:
         strip_path:    false
         preserve_host: false
         methods:       [GET, HEAD, POST, PUT, DELETE, OPTIONS]
+
+  # ---------------------------------------------------------------------------
+  # ETL Service – Health endpoint only
+  #   LOCAL: Docker DNS etl-service:4001
+  # Allows operators to check ETL status via Kong without direct container access.
+  # ---------------------------------------------------------------------------
+  - name: etl-service
+    url:             http://etl-service:4001
+    connect_timeout: 5000
+    read_timeout:    5000
+    write_timeout:   5000
+    retries:         1
+
+    routes:
+      - name:          etl-health-route
+        paths:         [/etl-health]
+        strip_path:    true
+        preserve_host: false
+        methods:       [GET, HEAD]

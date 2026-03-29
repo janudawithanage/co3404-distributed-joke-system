@@ -8,7 +8,7 @@
 # Service routing (Kong on VM4 -> private IPs):
 #   joke-service     -> http://10.0.1.4:3001  (VM1)
 #   submit-service   -> http://10.0.1.5:3002  (VM2)
-#   moderate-service -> http://10.0.1.5:3004  (VM2, co-located with submit)
+#   moderate-service -> http://10.0.1.7:3300  (VM3)
 #   rabbitmq mgmt    -> http://10.0.1.5:15672 (VM2 RabbitMQ management UI)
 #
 # Public routes exposed through Kong:
@@ -121,9 +121,19 @@ services:
         preserve_host: false
         methods:       [GET, HEAD]
 
+    plugins:
+      - name: rate-limiting
+        route: submit-api-route
+        config:
+          minute:              10
+          policy:              local
+          error_code:          429
+          error_message:       "Rate limit exceeded - Submit API allows 10 req/min. Retry after 60 seconds."
+          hide_client_headers: false
+
   # ---------------------------------------------------------------------------
-  # Moderate Service - VM2 (10.0.1.5:3004)  NEW - Option 4
-  # Co-located on VM2 alongside submit-service.
+  # Moderate Service - VM3 (10.0.1.7:3300)
+  # Runs on the dedicated moderation VM.
   #
   # Human moderators review jokes before they enter the database.
   # Authentication handled inside the service via Auth0 OIDC.
@@ -139,7 +149,7 @@ services:
   # *    /login,/logout,/callback,/me -> Auth0 OIDC flow endpoints
   # ---------------------------------------------------------------------------
   - name: moderate-service
-    url:             http://10.0.1.5:3004
+    url:             http://10.0.1.7:3300
     connect_timeout: 5000
     read_timeout:    15000
     write_timeout:   10000
@@ -206,5 +216,23 @@ services:
         strip_path:    false
         preserve_host: false
         methods:       [GET, HEAD, POST, PUT, DELETE, OPTIONS]
+
+  # ---------------------------------------------------------------------------
+  # ETL Service - VM1 (co-located with joke-service on 10.0.1.4:3001)
+  # Health endpoint only — allows operators to verify ETL status via Kong.
+  # ---------------------------------------------------------------------------
+  - name: etl-service
+    url:             http://10.0.1.4:3001
+    connect_timeout: 5000
+    read_timeout:    5000
+    write_timeout:   5000
+    retries:         1
+
+    routes:
+      - name:          etl-health-route
+        paths:         [/etl-health]
+        strip_path:    true
+        preserve_host: false
+        methods:       [GET, HEAD]
 
 

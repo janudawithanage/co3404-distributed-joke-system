@@ -3,144 +3,126 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- base href ensures relative assets (app.js) resolve under /submit/ when
+       accessed via Kong gateway (which strips the /submit prefix internally
+       but keeps the browser URL at /submit). -->
   <base href="/submit/" />
-  <title>CO3404 – Submit a Joke</title>
+  <title>Submit a Joke · Luxe</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg:           #0f172a;
-      --surface:      #1e293b;
-      --surface2:     #334155;
-      --accent:       #10b981;
-      --accent-hover: #059669;
-      --text:         #f1f5f9;
-      --muted:        #94a3b8;
-      --success:      #22c55e;
-      --error:        #ef4444;
-      --radius:       12px;
+      --bg: #0a0f1d;
+      --surface: rgba(255,255,255,0.04);
+      --card: rgba(255,255,255,0.06);
+      --stroke: rgba(255,255,255,0.08);
+      --accent: #5ce1e6;
+      --accent-strong: #c5ff7a;
+      --text: #e7eefb;
+      --muted: #95a4c7;
+      --success: #7cf6c4;
+      --error: #ff6b6b;
+      --radius: 16px;
     }
-
     * { box-sizing: border-box; margin: 0; padding: 0; }
-
     body {
-      background: var(--bg);
-      color:      var(--text);
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      min-height:  100vh;
-      display:     flex;
-      flex-direction: column;
+      background: linear-gradient(160deg, rgba(92,225,230,0.1), transparent 40%), var(--bg);
+      color: var(--text);
+      font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+      min-height: 100vh;
+      padding: 28px 16px 40px;
+      display: flex;
       align-items: center;
-      padding:     2rem 1rem;
-    }
-
-    header { text-align: center; margin-bottom: 2.5rem; }
-    header h1 { font-size: 2.2rem; color: var(--accent); }
-    header p  { color: var(--muted); margin-top: 0.4rem; font-size: 0.9rem; }
-
-    .form-card {
-      background:     var(--surface);
-      border-radius:  var(--radius);
-      padding:        2rem;
-      width:          100%;
-      max-width:      520px;
-      display:        flex;
       flex-direction: column;
-      gap:            1.3rem;
+      gap: 20px;
+    }
+    header { text-align: center; max-width: 760px; }
+    header h1 { font-size: 36px; letter-spacing: -0.02em; }
+    header p { color: var(--muted); margin-top: 10px; line-height: 1.6; }
+
+    .card {
+      width: 100%;
+      max-width: 720px;
+      background: var(--card);
+      border: 1px solid var(--stroke);
+      border-radius: 22px;
+      padding: 24px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.35);
     }
 
-    .form-group            { display: flex; flex-direction: column; gap: 0.4rem; }
-    .form-group label      { color: var(--muted); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.05em; }
-
-    input,
-    textarea,
-    select {
-      background:    var(--surface2);
-      border:        1px solid #475569;
-      color:         var(--text);
-      border-radius: 8px;
-      padding:       0.65rem 0.9rem;
-      font-size:     1rem;
-      font-family:   inherit;
-      width:         100%;
+    .form-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+    .form-group label { color: var(--muted); font-size: 13px; letter-spacing: 0.03em; text-transform: uppercase; }
+    input, textarea, select {
+      width: 100%;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--stroke);
+      color: var(--text);
+      padding: 12px 14px;
+      border-radius: 14px;
+      font-size: 16px;
+      font-family: inherit;
     }
-    textarea         { resize: vertical; min-height: 80px; }
-    input:focus,
-    textarea:focus,
-    select:focus     { outline: none; border-color: var(--accent); }
+    textarea { min-height: 100px; resize: vertical; }
+    input:focus, textarea:focus, select:focus { outline: 2px solid rgba(92,225,230,0.4); border-color: rgba(92,225,230,0.8); }
 
-    .type-row        { display: flex; gap: 0.6rem; align-items: flex-end; }
-    .type-row select { flex: 1; }
-    .type-row input  { flex: 1; display: none; } /* shown when custom selected */
+    .type-row { display: flex; gap: 10px; align-items: flex-end; }
+    .type-row input { display: none; }
 
     button {
-      background:    var(--accent);
-      color:         #fff;
-      border:        none;
-      padding:       0.8rem;
-      border-radius: 8px;
-      font-size:     1rem;
-      cursor:        pointer;
-      transition:    background 0.2s;
-      font-weight:   600;
+      width: 100%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+      color: #04101a;
+      border: none;
+      padding: 14px;
+      border-radius: 14px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 15px 45px rgba(92,225,230,0.25);
+      transition: transform 0.15s ease;
     }
-    button:hover    { background: var(--accent-hover); }
+    button:hover { transform: translateY(-2px); }
     button:disabled { opacity: 0.6; cursor: not-allowed; }
 
-    .alert {
-      padding:       0.85rem 1rem;
-      border-radius: 8px;
-      font-size:     0.95rem;
-    }
-    .alert-success { background: #14532d; color: var(--success); border: 1px solid var(--success); }
-    .alert-error   { background: #450a0a; color: var(--error);   border: 1px solid var(--error);   }
+    .alert { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--stroke); margin-top: 10px; }
+    .alert-success { color: var(--success); border-color: rgba(124,246,196,0.5); background: rgba(124,246,196,0.08); }
+    .alert-error { color: var(--error); border-color: rgba(255,107,107,0.5); background: rgba(255,107,107,0.08); }
 
-    .footer-links {
-      margin-top: 1.8rem;
-      text-align: center;
-      color:      var(--muted);
-      font-size:  0.85rem;
-      display:    flex;
-      gap:        1.5rem;
-      justify-content: center;
-    }
+    .footer-links { display: flex; gap: 12px; justify-content: center; margin-top: 18px; color: var(--muted); }
     .footer-links a { color: var(--accent); text-decoration: none; }
     .footer-links a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
-
   <header>
-    <h1>📬 Submit a Joke</h1>
-    <p>CO3404 Distributed Systems &mdash; Submit Microservice &mdash; Port 3200 (direct) / Kong :8000/submit</p>
+    <h1>Submit a premium joke</h1>
+    <p>Queue your wit for human moderation. Clean, resilient, and gateway-ready.</p>
   </header>
 
-  <div class="form-card">
-
+  <div class="card">
     <div class="form-group">
-      <label for="setup">Setup <span style="color:var(--error)">*</span></label>
+      <label for="setup">Setup</label>
       <textarea id="setup" placeholder="Why did the developer go broke?"></textarea>
     </div>
-
     <div class="form-group">
-      <label for="punchline">Punchline <span style="color:var(--error)">*</span></label>
+      <label for="punchline">Punchline</label>
       <textarea id="punchline" placeholder="Because they used up all their cache!"></textarea>
     </div>
-
     <div class="form-group">
-      <label>Type <span style="color:var(--error)">*</span></label>
+      <label>Type</label>
       <div class="type-row">
         <select id="typeSelect"></select>
-        <input  id="typeCustom" type="text" placeholder="Custom type…" />
+        <input id="typeCustom" type="text" placeholder="Custom type…" />
       </div>
     </div>
-
     <div id="alertBox"></div>
-
-    <button id="submitBtn">Submit Joke</button>
+    <button id="submitBtn">Submit to queue</button>
   </div>
 
   <div class="footer-links">
-    <a href="/docs"     target="_blank">📄 Swagger API Docs</a>
-    <a href="/joke-ui"  target="_blank">🤣 Browse Jokes</a>
+    <a href="/docs" target="_blank" rel="noreferrer">Swagger docs</a>
+    <a href="/joke-ui" target="_blank" rel="noreferrer">Homepage</a>
   </div>
 
   <script src="app.js"></script>

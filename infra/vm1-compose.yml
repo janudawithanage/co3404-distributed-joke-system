@@ -62,8 +62,9 @@ services:
       DB_USER:     ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME:     ${DB_NAME}
-      MONGO_URI:   ${MONGO_URI:-}      # only used when DB_TYPE=mongo
-      PORT:        4000
+      MONGO_URI:           ${MONGO_URI:-}            # only used when DB_TYPE=mongo
+      PUBLIC_GATEWAY_BASE: ${PUBLIC_GATEWAY_BASE:-}  # set to Kong public URL (e.g. https://<KONG_IP>)
+      PORT:                4000
     ports:
       - "3000:4000"
     depends_on:
@@ -91,6 +92,8 @@ services:
       RABBITMQ_USER:     ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       PORT:              4001
+    ports:
+      - "3001:4001"
     depends_on:
       mysql:
         condition: service_healthy

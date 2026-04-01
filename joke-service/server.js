@@ -23,6 +23,7 @@
 
 const express = require('express');
 const path    = require('path');
+const helmet  = require('helmet');
 const { connectWithRetry, getJokes, getTypes } = require('./db');
 
 const app  = express();
@@ -47,6 +48,26 @@ function buildPublicConfig() {
     moderateServiceBase: moderateBase
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Security Headers (helmet)
+// ─────────────────────────────────────────────────────────────────────────────
+app.use(helmet({
+  contentSecurityPolicy: false,   // allow inline styles / Google Fonts in the frontend
+  crossOriginEmbedderPolicy: false
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Request Logging — structured per-request log line with duration
+// ─────────────────────────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - start;
+    console.log(`[Joke Service] ${req.method} ${req.originalUrl} → ${res.statusCode} (${ms}ms)`);
+  });
+  next();
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CORS
@@ -131,10 +152,11 @@ app.get('/health', (_req, res) => {
 // ─────────────────────────────────────────────────────────────
 // Startup
 // ─────────────────────────────────────────────────────────────
+let server;
 async function start() {
   try {
     await connectWithRetry();
-    app.listen(PORT, () => {
+    server = app.listen(PORT, () => {
       console.log(`[Joke Service] Listening on http://localhost:${PORT}`);
       console.log(`[Joke Service] DB type: ${process.env.DB_TYPE || 'mysql'}`);
     });
@@ -143,5 +165,26 @@ async function start() {
     process.exit(1);
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// Graceful Shutdown — close HTTP server on SIGTERM/SIGINT
+// Docker sends SIGTERM on `docker stop`. This ensures in-flight
+// requests complete before the container exits.
+// ─────────────────────────────────────────────────────────────
+function shutdown(signal) {
+  console.log(`[Joke Service] ${signal} received — shutting down gracefully…`);
+  if (server) {
+    server.close(() => {
+      console.log('[Joke Service] HTTP server closed');
+      process.exit(0);
+    });
+    // Force exit after 10 s if connections linger
+    setTimeout(() => process.exit(1), 10000).unref();
+  } else {
+    process.exit(0);
+  }
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
 
 start();

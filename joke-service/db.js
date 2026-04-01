@@ -29,13 +29,23 @@ if (DB_TYPE === 'mongo') {
 
   const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/jokesdb';
 
+  // Mirror the same Type schema as etl-service so both services
+  // read/write from the same 'types' collection.
+  const typeSchema = new mongoose.Schema(
+    { name: { type: String, unique: true, lowercase: true, trim: true, maxlength: 50 } },
+    { timestamps: false }
+  );
+
   const jokeSchema = new mongoose.Schema({
-    setup:     { type: String, required: true },
-    punchline: { type: String, required: true },
-    type:      { type: String, required: true, lowercase: true, trim: true }
+    setup:     { type: String, required: true, maxlength: 500 },
+    punchline: { type: String, required: true, maxlength: 500 },
+    type:      { type: String, required: true, lowercase: true, trim: true, maxlength: 50 }
   }, { timestamps: true });
 
-  const Joke = mongoose.model('Joke', jokeSchema);
+  // Use mongoose.models to avoid "Cannot overwrite model once compiled" errors
+  // when this module is re-evaluated (e.g. in tests or hot-reload scenarios).
+  const Type = mongoose.models.Type || mongoose.model('Type', typeSchema);
+  const Joke = mongoose.models.Joke || mongoose.model('Joke', jokeSchema);
 
   async function connectWithRetry(maxRetries = 10, delayMs = 3000) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -69,8 +79,12 @@ if (DB_TYPE === 'mongo') {
   }
 
   async function getTypes() {
-    const types = await Joke.distinct('type');
-    return types.sort().map((name, i) => ({ id: i + 1, name }));
+    // Query the dedicated 'types' collection (written by etl-service).
+    // This ensures type consistency: a newly created type (with no jokes yet)
+    // is still visible immediately after ETL's type_update ECST event fires.
+    // Using Joke.distinct('type') was wrong — it would miss types with 0 jokes.
+    const types = await Type.find({}).sort({ name: 1 });
+    return types.map((t, i) => ({ id: i + 1, name: t.name }));
   }
 
   module.exports = { connectWithRetry, getJokes, getTypes };

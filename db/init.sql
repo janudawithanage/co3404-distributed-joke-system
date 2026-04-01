@@ -28,7 +28,12 @@ CREATE TABLE IF NOT EXISTS jokes (
   setup     TEXT NOT NULL,
   punchline TEXT NOT NULL,
   type_id   INT  NOT NULL,
-  FOREIGN KEY (type_id) REFERENCES types(id) ON DELETE RESTRICT
+  FOREIGN KEY (type_id) REFERENCES types(id) ON DELETE RESTRICT,
+  -- Prevent exact-duplicate joke submissions reaching the database.
+  -- TEXT columns need a prefix length for index/unique constraints in MySQL.
+  -- prefetch(1) in moderate + manual ACK already prevents most duplication;
+  -- this is a defence-in-depth constraint at the DB layer.
+  UNIQUE KEY uq_joke (setup(500), punchline(500))
 );
 
 -- ── Seed Data ─────────────────────────────────────────────

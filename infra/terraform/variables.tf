@@ -135,3 +135,18 @@ variable "rate_limit_per_minute" {
   type    = number
   default = 5
 }
+
+# ── RabbitMQ credentials ──────────────────────────────────────────────────────
+
+variable "rabbitmq_user" {
+  description = "RabbitMQ default username — must be changed from 'guest' in production"
+  type        = string
+  default     = "guest"
+}
+
+variable "rabbitmq_password" {
+  description = "RabbitMQ default password — must be changed from 'guest' in production"
+  type        = string
+  sensitive   = true
+  default     = "guest"
+}

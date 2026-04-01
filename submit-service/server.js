@@ -29,6 +29,7 @@
 const express      = require('express');
 const path         = require('path');
 const fs           = require('fs').promises;
+const helmet       = require('helmet');
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi    = require('swagger-ui-express');
 
@@ -39,6 +40,26 @@ const PORT = process.env.PORT || 4200;
 
 const CACHE_DIR  = '/app/cache';
 const CACHE_FILE = path.join(CACHE_DIR, 'types.json');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Security Headers (helmet)
+// ─────────────────────────────────────────────────────────────────────────────
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Request Logging — structured per-request log line with duration
+// ─────────────────────────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - start;
+    console.log(`[Submit Service] ${req.method} ${req.originalUrl} → ${res.statusCode} (${ms}ms)`);
+  });
+  next();
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CORS
@@ -55,6 +76,25 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/submit', express.static(path.join(__dirname, 'public')));
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GET /config.js — Runtime configuration injected into the frontend
+//
+// Exposes the gateway base URL (and optionally Azure base URL) as a
+// global window.APP_CONFIG object — identical pattern to joke-service.
+// The frontend app.js reads window.APP_CONFIG.gatewayBase to route all
+// API calls through Kong instead of hard-coding a base URL.
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/config.js', (_req, res) => {
+  const config = {
+    gatewayBase:  process.env.PUBLIC_GATEWAY_BASE  || '',
+    azureBase:    process.env.PUBLIC_AZURE_BASE     || '',
+    localBase:    process.env.PUBLIC_LOCAL_BASE     || '',
+  };
+  res.type('application/javascript').send(
+    `window.APP_CONFIG = ${JSON.stringify(config)};`
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Swagger / OpenAPI
 // ─────────────────────────────────────────────────────────────────────────────
 const swaggerOptions = {
@@ -68,7 +108,7 @@ const swaggerOptions = {
     servers: [
       { url: 'http://localhost:3200',  description: 'Local – direct' },
       { url: 'http://localhost:8000',  description: 'Local – Kong' },
-      { url: 'https://KONG_PUBLIC_IP', description: 'Azure – Kong (replace IP)' }
+      { url: process.env.PUBLIC_AZURE_BASE || process.env.PUBLIC_GATEWAY_BASE || 'https://KONG_PUBLIC_IP', description: 'Azure – Kong' }
     ]
   },
   apis: ['./server.js']
@@ -110,6 +150,13 @@ app.post('/submit', async (req, res) => {
     return res.status(400).json({
       error: 'Missing required fields: setup, punchline, type'
     });
+  }
+
+  if (setup.length > 500 || punchline.length > 500) {
+    return res.status(400).json({ error: 'setup and punchline must each be 500 characters or fewer' });
+  }
+  if (type.length > 50) {
+    return res.status(400).json({ error: 'type must be 50 characters or fewer' });
   }
 
   const jokeData = {
@@ -183,14 +230,35 @@ app.get('/health', (_req, res) => {
 // ─────────────────────────────────────────────────────────────
 // Startup
 // ─────────────────────────────────────────────────────────────
+let server;
 async function start() {
   await fs.mkdir(CACHE_DIR, { recursive: true });
   connect();
-  app.listen(PORT, () => {
+  server = app.listen(PORT, () => {
     console.log(`[Submit Service] Listening on http://localhost:${PORT}`);
     console.log(`[Submit Service] Swagger UI at  http://localhost:${PORT}/docs`);
   });
 }
+
+// ─────────────────────────────────────────────────────────────
+// Graceful Shutdown — close HTTP server on SIGTERM/SIGINT
+// Docker sends SIGTERM on `docker stop`. This ensures in-flight
+// requests complete before the container exits.
+// ─────────────────────────────────────────────────────────────
+function shutdown(signal) {
+  console.log(`[Submit Service] ${signal} received — shutting down gracefully…`);
+  if (server) {
+    server.close(() => {
+      console.log('[Submit Service] HTTP server closed');
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 10000).unref();
+  } else {
+    process.exit(0);
+  }
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
 
 start().catch(err => {
   console.error('[Submit Service] Fatal startup error:', err.message);

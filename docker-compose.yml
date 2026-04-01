@@ -139,10 +139,11 @@ services:
     build: ./submit-service
     container_name: jokes_submit_service
     environment:
-      RABBITMQ_HOST:     rabbitmq
-      RABBITMQ_USER:     ${RABBITMQ_USER}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
-      PORT:              4200
+      RABBITMQ_HOST:       rabbitmq
+      RABBITMQ_USER:       ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD:   ${RABBITMQ_PASSWORD}
+      PUBLIC_GATEWAY_BASE: ${PUBLIC_GATEWAY_BASE:-http://localhost:8000}
+      PORT:                4200
     ports:
       - "3200:4200"
     depends_on:

@@ -1,14 +1,14 @@
 /**
  * submit-service/public/app.js
  *
- * Frontend for the Submit microservice.
- * Loads available joke types from /types (with cache fallback
- * on the server side), and POSTs new jokes to /submit.
+ * Production-level frontend for the Submit microservice.
+ * Features: character counters, loading states, keyboard shortcuts,
+ * accessible alerts, custom type toggle, auto-dismiss success.
  */
 
 'use strict';
 
-const cfg = window.APP_CONFIG || {};
+const cfg         = window.APP_CONFIG || {};
 const gatewayBase = (cfg.gatewayBase || cfg.azureBase || cfg.localBase || window.location.origin || '').replace(/\/$/, '');
 
 function withBase(path) {
@@ -47,20 +47,39 @@ async function loadTypes() {
     });
 
   } catch (err) {
-    // Fallback: let user type the type manually
-    console.warn('[app.js] Could not load types, showing text input');
+    console.warn('[Submit UI] Could not load types, showing text input');
     sel.style.display    = 'none';
     custom.style.display = 'block';
   }
 }
 
+/* ── Character counter helper ────────────────────────────── */
+function setupCharCounter(inputId, countId, max) {
+  const input   = document.getElementById(inputId);
+  const counter = document.getElementById(countId);
+  if (!input || !counter) return;
+
+  input.addEventListener('input', () => {
+    const len = input.value.length;
+    counter.textContent = len;
+    counter.parentElement.classList.toggle('warn', len > max * 0.9);
+  });
+}
+
 /* ── Alert helper ────────────────────────────────────────── */
 function showAlert(msg, kind) {
-  const box      = document.getElementById('alertBox');
-  box.innerHTML  = `<div class="alert alert-${kind}">${msg}</div>`;
+  const box = document.getElementById('alertBox');
+  box.textContent = msg;
+  box.className   = `alert visible alert-${kind}`;
   if (kind === 'success') {
-    setTimeout(() => { box.innerHTML = ''; }, 6000);
+    setTimeout(() => {
+      box.classList.remove('visible');
+    }, 5000);
   }
+}
+
+function hideAlert() {
+  document.getElementById('alertBox').classList.remove('visible');
 }
 
 /* ── Submit joke ─────────────────────────────────────────── */
@@ -79,9 +98,11 @@ async function submitJoke() {
     return;
   }
 
-  const btn          = document.getElementById('submitBtn');
-  btn.disabled       = true;
-  btn.textContent    = 'Submitting…';
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true;
+  btn.classList.add('loading');
+  btn.querySelector('.btn-text').textContent = 'Submitting…';
+  hideAlert();
 
   try {
     const res  = await fetch(withBase('/submit'), {
@@ -89,23 +110,27 @@ async function submitJoke() {
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ setup, punchline, type })
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
 
     if (res.ok) {
       showAlert(
         '✅ Joke queued for moderation! A moderator will review it before it enters the database.',
         'success'
       );
+      // Clear form
       document.getElementById('setup').value     = '';
-      document.getElementById('punchline').value = '';
+      document.getElementById('punchline').value  = '';
+      document.getElementById('setup-count').textContent    = '0';
+      document.getElementById('punchline-count').textContent = '0';
     } else {
-      showAlert(`❌ ${escapeHtml(data.error)}`, 'error');
+      showAlert(`❌ ${escapeHtml(data.error || 'Submission failed.')}`, 'error');
     }
   } catch (err) {
-    showAlert('❌ Network error – could not reach the Submit Service.', 'error');
+    showAlert('❌ Network error — could not reach the Submit Service.', 'error');
   } finally {
-    btn.disabled    = false;
-    btn.textContent    = 'Submit to queue';
+    btn.disabled = false;
+    btn.classList.remove('loading');
+    btn.querySelector('.btn-text').textContent = 'Submit to queue';
   }
 }
 
@@ -119,5 +144,16 @@ function escapeHtml(str) {
 /* ── Init ─────────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', () => {
   loadTypes();
+  setupCharCounter('setup',     'setup-count',     500);
+  setupCharCounter('punchline', 'punchline-count', 500);
+
   document.getElementById('submitBtn').addEventListener('click', submitJoke);
+
+  // Keyboard shortcut: Ctrl/Cmd+Enter to submit
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      submitJoke();
+    }
+  });
 });

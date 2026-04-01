@@ -1,27 +1,39 @@
 /**
  * moderate-service/public/app.js
  *
- * Moderation UI JavaScript
- * ─────────────────────────
- * Behaviour:
- *  1. On load: fetch /me (user profile) and /types (for dropdown)
- *  2. Poll GET /moderate every 1 second for the next joke to review
- *     - If joke available: show mod-card, stop polling
- *     - If queue empty:    show "polling" banner, keep polling
- *  3. Approve button:  POST /moderated with (possibly edited) fields
- *  4. Reject button:   POST /reject, then resume polling immediately
+ * Production-level Moderation UI JavaScript
+ * ──────────────────────────────────────────
+ * Features:
+ *  - Session statistics (approved / rejected / total)
+ *  - Keyboard shortcuts: A = approve, R = reject, Ctrl+Enter = approve
+ *  - Polling with exponential backoff on errors
+ *  - Accessible toast notifications
+ *  - Editable joke fields before approve
+ *  - User profile display (Auth0 or mock)
  */
 
 'use strict';
 
+// ── State ────────────────────────────────────────────────────────────────────
 let pollTimer    = null;
 let isProcessing = false;
+let pollDelay    = 1000;        // starts at 1 s, backs off on errors
+const POLL_MIN   = 1000;
+const POLL_MAX   = 8000;
+
+const stats = { approved: 0, rejected: 0 };
 
 // ── On page load ─────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
+  // Bind click handlers
+  document.getElementById('btn-approve').addEventListener('click', approveJoke);
+  document.getElementById('btn-reject').addEventListener('click', rejectJoke);
+  document.getElementById('logout-btn')?.addEventListener('click', () => { location.href = '/logout'; });
+
   await loadUserProfile();
   await loadTypes();
   startPolling();
+  bindKeyboardShortcuts();
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -29,53 +41,49 @@ window.addEventListener('DOMContentLoaded', async () => {
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadUserProfile() {
   try {
-    const res  = await fetch('/me');
-    if (!res.ok) return; // unauthenticated — OIDC will redirect
+    const res = await fetch('/me');
+    if (!res.ok) return;
     const user = await res.json();
 
     document.getElementById('user-info').style.display = 'flex';
-    document.getElementById('user-name').textContent   = user.name || user.email;
+    document.getElementById('user-name').textContent = user.name || user.email;
     if (user.picture) {
       document.getElementById('user-avatar').src = user.picture;
     } else {
       document.getElementById('user-avatar').style.display = 'none';
     }
-  } catch (_) { /* ignore */ }
+  } catch (_) { /* ignore — OIDC will redirect if needed */ }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // loadTypes — fetch /types and populate the <select> dropdown
-// This reads from the local ECST cache; no HTTP call to joke-service.
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadTypes() {
   try {
-    const res   = await fetch('/types');
+    const res   = await fetch('/moderate-types');
     const types = await res.json();
     const sel   = document.getElementById('type');
-    // Remove all options except the first placeholder
     while (sel.options.length > 1) sel.remove(1);
     types.forEach(t => {
-      const opt   = document.createElement('option');
-      opt.value   = t.name;
-      opt.textContent = t.name;
+      const opt = document.createElement('option');
+      opt.value = t.name;
+      opt.textContent = t.name.charAt(0).toUpperCase() + t.name.slice(1);
       sel.appendChild(opt);
     });
   } catch (_) { /* types will remain empty if service not yet warm */ }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Polling — GET /moderate every 1 second
+// Polling — GET /moderate with adaptive interval
 // ─────────────────────────────────────────────────────────────────────────────
 function startPolling() {
   setStatus('Polling for jokes…', true);
-  pollTimer = setInterval(pollForJoke, 1000);
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(pollForJoke, pollDelay);
 }
 
 function stopPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
 
 async function pollForJoke() {
@@ -84,29 +92,37 @@ async function pollForJoke() {
     const res = await fetch('/moderate');
 
     if (res.status === 204) {
-      // Queue is empty — keep polling
-      setStatus('No jokes available for moderation. Polling every second…', true);
+      // Queue empty — reset to normal speed
+      if (pollDelay !== POLL_MIN) { pollDelay = POLL_MIN; stopPolling(); startPolling(); }
+      setStatus('No jokes in queue. Polling every second…', true);
       return;
     }
 
     if (res.status === 401) {
       stopPolling();
-      setStatus('Session expired. Please log in again.');
+      setStatus('Session expired — redirecting to login…', false);
       setTimeout(() => { location.href = '/login'; }, 2000);
       return;
     }
 
     if (!res.ok) {
-      setStatus('Broker unavailable — retrying…', true);
+      // Back off on broker errors
+      pollDelay = Math.min(pollDelay * 2, POLL_MAX);
+      stopPolling(); startPolling();
+      setStatus(`Broker unavailable — retrying every ${pollDelay / 1000}s…`, true);
       return;
     }
 
+    // Got a joke
+    pollDelay = POLL_MIN;
     const joke = await res.json();
     stopPolling();
     showJoke(joke);
 
   } catch (err) {
-    setStatus('Connection error — retrying…', true);
+    pollDelay = Math.min(pollDelay * 2, POLL_MAX);
+    stopPolling(); startPolling();
+    setStatus(`Connection error — retrying every ${pollDelay / 1000}s…`, true);
   }
 }
 
@@ -117,7 +133,6 @@ function showJoke(joke) {
   document.getElementById('setup').value     = joke.setup;
   document.getElementById('punchline').value = joke.punchline;
 
-  // Select the matching type in the dropdown, or add it if missing
   const sel = document.getElementById('type');
   let found = false;
   for (const opt of sel.options) {
@@ -126,12 +141,11 @@ function showJoke(joke) {
   if (!found && joke.type) {
     const opt = document.createElement('option');
     opt.value = joke.type;
-    opt.textContent = joke.type;
+    opt.textContent = joke.type.charAt(0).toUpperCase() + joke.type.slice(1);
     opt.selected = true;
     sel.appendChild(opt);
   }
 
-  // Show the card, hide the banner
   document.getElementById('status-banner').style.display = 'none';
   document.getElementById('mod-card').classList.add('visible');
   setButtonsDisabled(false);
@@ -166,6 +180,8 @@ async function approveJoke() {
     });
 
     if (res.ok) {
+      stats.approved++;
+      updateStats();
       showToast('✅ Joke approved and sent to database!', 'success');
     } else {
       const body = await res.json().catch(() => ({}));
@@ -175,12 +191,11 @@ async function approveJoke() {
     showToast(`❌ Network error: ${err.message}`, 'error');
   }
 
-  // Reset UI and resume polling after 1 second
   setTimeout(() => {
     hideCard();
     isProcessing = false;
     startPolling();
-  }, 1000);
+  }, 800);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -194,6 +209,8 @@ async function rejectJoke() {
   try {
     const res = await fetch('/reject', { method: 'POST' });
     if (res.ok) {
+      stats.rejected++;
+      updateStats();
       showToast('❌ Joke rejected and discarded.', 'error');
     } else {
       const body = await res.json().catch(() => ({}));
@@ -203,12 +220,40 @@ async function rejectJoke() {
     showToast(`Network error: ${err.message}`, 'error');
   }
 
-  // Resume polling for next joke
   setTimeout(() => {
     hideCard();
     isProcessing = false;
     startPolling();
-  }, 800);
+  }, 600);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Keyboard Shortcuts — A / R / Ctrl+Enter
+// ─────────────────────────────────────────────────────────────────────────────
+function bindKeyboardShortcuts() {
+  document.addEventListener('keydown', (e) => {
+    // Don't trigger shortcuts while typing in form fields
+    const tag = document.activeElement?.tagName;
+    if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') {
+      // Allow Ctrl+Enter even in textareas
+      if (e.ctrlKey && e.key === 'Enter') {
+        e.preventDefault();
+        approveJoke();
+      }
+      return;
+    }
+
+    const card = document.getElementById('mod-card');
+    if (!card.classList.contains('visible')) return;
+
+    if (e.key === 'a' || e.key === 'A') {
+      e.preventDefault();
+      approveJoke();
+    } else if (e.key === 'r' || e.key === 'R') {
+      e.preventDefault();
+      rejectJoke();
+    }
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -227,15 +272,21 @@ function setButtonsDisabled(disabled) {
   document.getElementById('btn-reject').disabled  = disabled;
 }
 
-function setStatus(text, showSpinner = false) {
+function setStatus(text, showSpinner) {
   document.getElementById('status-text').textContent = text;
-  const spinner = document.querySelector('.spinner');
-  spinner.style.display = showSpinner ? 'block' : 'none';
+  const spinner = document.querySelector('#status-banner .spinner');
+  if (spinner) spinner.style.display = showSpinner ? 'block' : 'none';
 }
 
-function showToast(msg, type = '') {
+function updateStats() {
+  document.getElementById('stat-approved').textContent = stats.approved;
+  document.getElementById('stat-rejected').textContent = stats.rejected;
+  document.getElementById('stat-total').textContent    = stats.approved + stats.rejected;
+}
+
+function showToast(msg, type) {
   const toast = document.getElementById('toast');
   toast.textContent = msg;
-  toast.className   = `show ${type}`;
+  toast.className = `show ${type || ''}`;
   setTimeout(() => { toast.className = ''; }, 3500);
 }

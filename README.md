@@ -67,10 +67,10 @@ Browser --> POST /submit --> submit-service --> "submit" queue --> moderate-serv
 
 | Service | VM | Role |
 |---|---|---|
-| **Joke Service** | VM1 :3001 | Serves jokes from MySQL/MongoDB; provides a browsing frontend |
+| **Joke Service** | VM1 :3000 | Serves jokes from MySQL/MongoDB; provides a browsing frontend |
 | **ETL Service** | VM1 (internal) | Consumes `moderated` queue; writes to DB; publishes ECST type_update |
 | **MySQL** | VM1 :3306 | Relational store for joke types and jokes |
-| **Submit Service** | VM2 :3002 | Accepts new jokes; publishes to `submit` queue; Swagger docs |
+| **Submit Service** | VM2 :3200 | Accepts new jokes; publishes to `submit` queue; Swagger docs |
 | **RabbitMQ** | VM2 :5672 | Message broker: `submit`, `moderated`, `type_update` fanout exchange |
 | **Moderate Service** | VM3 :3300 | Auth0 OIDC-protected UI; reviewer approves/rejects queued jokes |
 | **Kong** | VM4 :443/80 | DB-less API gateway: TLS, rate-limiting, correlation IDs |

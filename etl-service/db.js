@@ -30,21 +30,21 @@ if (DB_TYPE === 'mongo') {
   const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/jokesdb';
 
   const typeSchema = new mongoose.Schema(
-    { name: { type: String, unique: true, lowercase: true, trim: true } },
+    { name: { type: String, unique: true, lowercase: true, trim: true, maxlength: 50 } },
     { timestamps: false }
   );
 
   const jokeSchema = new mongoose.Schema(
     {
-      setup:     { type: String, required: true },
-      punchline: { type: String, required: true },
-      type:      { type: String, required: true, lowercase: true, trim: true }
+      setup:     { type: String, required: true, maxlength: 500 },
+      punchline: { type: String, required: true, maxlength: 500 },
+      type:      { type: String, required: true, lowercase: true, trim: true, maxlength: 50 }
     },
     { timestamps: true }
   );
 
-  const Type = mongoose.model('Type', typeSchema);
-  const Joke = mongoose.model('Joke', jokeSchema);
+  const Type = mongoose.models.Type || mongoose.model('Type', typeSchema);
+  const Joke = mongoose.models.Joke || mongoose.model('Joke', jokeSchema);
 
   async function connectWithRetry(maxRetries = 10, delayMs = 3000) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -136,11 +136,17 @@ if (DB_TYPE === 'mongo') {
       throw new Error('Message missing required fields: setup, punchline, type');
     }
     const { id: typeId, isNewType } = await getOrCreateType(type);
-    await pool.query(
-      'INSERT INTO jokes (setup, punchline, type_id) VALUES (?, ?, ?)',
+    // INSERT IGNORE: silently skips if the same (setup, punchline) already exists.
+    // This handles edge cases where a message is re-delivered (at-least-once).
+    const [result] = await pool.query(
+      'INSERT IGNORE INTO jokes (setup, punchline, type_id) VALUES (?, ?, ?)',
       [setup, punchline, typeId]
     );
-    console.log(`[DB/MySQL] ✅ Inserted joke (type: ${type}): "${String(setup).substring(0, 50)}…"`);
+    if (result.affectedRows > 0) {
+      console.log(`[DB/MySQL] ✅ Inserted joke (type: ${type}): "${String(setup).substring(0, 50)}…"`);
+    } else {
+      console.warn(`[DB/MySQL] ⚠️  Duplicate joke skipped (already in DB): "${String(setup).substring(0, 50)}…"`);
+    }
     return { isNewType };
   }
 

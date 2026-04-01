@@ -32,6 +32,7 @@
 const express = require('express');
 const path    = require('path');
 const fs      = require('fs').promises;
+const helmet  = require('helmet');
 
 const { connect, getNextJoke, approveJoke, rejectJoke, isReady } = require('./rabbitmq');
 const { auth, buildAuthConfig, requiresAuth, requiresAuthJson, AUTH_ENABLED }  = require('./auth');
@@ -44,10 +45,31 @@ const CACHE_DIR  = '/app/cache';
 const CACHE_FILE = path.join(CACHE_DIR, 'types.json');
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Security Headers (helmet)
+// ─────────────────────────────────────────────────────────────────────────────
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Request Logging — structured per-request log line with duration
+// ─────────────────────────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - start;
+    console.log(`[Moderate Service] ${req.method} ${req.originalUrl} → ${res.statusCode} (${ms}ms)`);
+  });
+  next();
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // CORS — allow browser requests from Kong's public origin
 // ─────────────────────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  const allowedOrigin = process.env.AUTH0_BASE_URL || process.env.PUBLIC_GATEWAY_BASE || '*';
+  res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
@@ -85,6 +107,8 @@ if (AUTH_ENABLED) {
 // Kong routes /moderate-ui with strip_path:true, so the service always receives /
 // Do NOT mount at /moderate — that conflicts with the GET /moderate API endpoint
 app.use(express.static(path.join(__dirname, 'public')));
+// Also serve at /moderate-ui for direct access (e.g. bypassing Kong in dev)
+app.use('/moderate-ui', express.static(path.join(__dirname, 'public')));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /health — public, no auth required
@@ -99,11 +123,13 @@ app.get('/health', (_req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /types
+// GET /types  and  GET /moderate-types
 // Returns the cached types array (updated via ECST events from ETL).
 // Public: the types dropdown needs to load even before full OIDC flow completes.
-// ─────────────────────────────────────────────────────────────────────────────
-app.get('/types', async (_req, res) => {
+// /moderate-types is exposed via a dedicated Kong route so the moderation UI
+// fetches from this service's own ECST cache, independent of submit-service.
+// ───────────────────────────────────────────────────────────────────────────────
+async function serveTypesCache(_req, res) {
   try {
     const raw   = await fs.readFile(CACHE_FILE, 'utf8');
     const types = JSON.parse(raw);
@@ -112,7 +138,9 @@ app.get('/types', async (_req, res) => {
     // Cache not yet populated (service just started); return empty array
     res.json([]);
   }
-});
+}
+app.get('/types', serveTypesCache);
+app.get('/moderate-types', serveTypesCache);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /moderate — PROTECTED (requires authentication)
@@ -176,6 +204,13 @@ app.post('/moderated', requiresAuthJson, async (req, res) => {
     });
   }
 
+  if (setup.length > 500 || punchline.length > 500) {
+    return res.status(400).json({ error: 'setup and punchline must each be 500 characters or fewer' });
+  }
+  if (type.length > 50) {
+    return res.status(400).json({ error: 'type must be 50 characters or fewer' });
+  }
+
   const approvedJoke = {
     setup:       setup.trim(),
     punchline:   punchline.trim(),
@@ -220,7 +255,7 @@ app.post('/reject', requiresAuthJson, async (req, res) => {
 // GET /me — PROTECTED (requires authentication)
 // Returns the authenticated user's profile (for the UI header).
 // ─────────────────────────────────────────────────────────────────────────────
-app.get('/me', requiresAuth(), (req, res) => {
+app.get('/me', requiresAuthJson, (req, res) => {
   const user = req.oidc.user;
   res.json({
     name:    user.name  || user.nickname || user.email,
@@ -232,6 +267,7 @@ app.get('/me', requiresAuth(), (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Startup — initialise cache dir, connect RabbitMQ, start HTTP server
 // ─────────────────────────────────────────────────────────────────────────────
+let server;
 async function start() {
   // Ensure the cache directory exists (Docker volume may not pre-create it)
   await fs.mkdir(CACHE_DIR, { recursive: true });
@@ -239,11 +275,31 @@ async function start() {
   // Start RabbitMQ connection (auto-reconnects in background)
   connect();
 
-  app.listen(PORT, () => {
+  server = app.listen(PORT, () => {
     console.log(`[Moderate Service] Listening on http://localhost:${PORT}`);
     console.log(`[Moderate Service] Auth0 base URL: ${process.env.AUTH0_BASE_URL || `http://localhost:${PORT}`}`);
   });
 }
+
+// ─────────────────────────────────────────────────────────────
+// Graceful Shutdown — close HTTP server on SIGTERM/SIGINT
+// Docker sends SIGTERM on `docker stop`. This ensures in-flight
+// requests complete before the container exits.
+// ─────────────────────────────────────────────────────────────
+function shutdown(signal) {
+  console.log(`[Moderate Service] ${signal} received — shutting down gracefully…`);
+  if (server) {
+    server.close(() => {
+      console.log('[Moderate Service] HTTP server closed');
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 10000).unref();
+  } else {
+    process.exit(0);
+  }
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
 
 start().catch(err => {
   console.error('[Moderate Service] Fatal startup error:', err.message);

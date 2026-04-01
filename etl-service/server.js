@@ -39,10 +39,14 @@
 
 const amqp    = require('amqplib');
 const express = require('express');
+const helmet  = require('helmet');
 const { connectWithRetry, insertJoke, getAllTypes } = require('./db');
 
 const app  = express();
 const PORT = process.env.PORT || 4001;
+
+// Security headers
+app.use(helmet());
 
 const MODERATED_QUEUE = 'moderated';
 const TYPE_EXCHANGE   = 'type_update'; // fanout exchange for ECST events
@@ -196,24 +200,42 @@ app.get('/health', (_req, res) => {
 // ─────────────────────────────────────────────────────────────
 // Startup
 // ─────────────────────────────────────────────────────────────
+let server;
 async function start() {
   try {
     await connectWithRetry();
 
-    app.listen(PORT, () => {
+    server = app.listen(PORT, () => {
       console.log(`[ETL Service] Health endpoint at http://localhost:${PORT}/health`);
       console.log(`[ETL Service] DB type: ${process.env.DB_TYPE || 'mysql'}`);
     });
 
-    startConsumer().catch(err => {
-      console.error('[ETL] Unexpected consumer exit:', err.message);
-      process.exit(1);
-    });
+    startConsumer(); // infinite retry loop — does not resolve or reject under normal operation
 
   } catch (err) {
     console.error('[ETL Service] Fatal startup error:', err.message);
     process.exit(1);
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// Graceful Shutdown — close HTTP server on SIGTERM/SIGINT
+// Docker sends SIGTERM on `docker stop`. This ensures in-flight
+// requests complete before the container exits.
+// ─────────────────────────────────────────────────────────────
+function shutdown(signal) {
+  console.log(`[ETL Service] ${signal} received — shutting down gracefully…`);
+  if (server) {
+    server.close(() => {
+      console.log('[ETL Service] HTTP server closed');
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 10000).unref();
+  } else {
+    process.exit(0);
+  }
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
 
 start();

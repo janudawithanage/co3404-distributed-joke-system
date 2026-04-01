@@ -1,44 +1,35 @@
 # =============================================================================
-# infra/kong/kong.local.yml  -- Kong Declarative Config (LOCAL + HOSTED REFERENCE)
+# infra/kong/kong.local.yml  (LOCAL DEVELOPMENT)
 #
-# LOCAL (Docker Compose):
-#   Kong listens on http://localhost:8000
-#   Upstreams resolve via Docker bridge DNS (jokes_network)
+# Kong declarative configuration for local Docker Compose development.
+# Mounted into the Kong container by the root docker-compose.yml.
 #
-# HOSTED (Azure -- vm-kong, 85.211.240.162):
-#   Config auto-generated from infra/terraform/kong.yml.tpl by Terraform
-#   Kong listens on https://85.211.240.162  (TLS self-signed, IP SAN)
-#   Upstreams use Azure private IPs:
-#     joke-service     -> http://10.0.1.4:3001  (VM1)
-#     submit-service   -> http://10.0.1.5:3002  (VM2)
-#     moderate-service -> http://10.0.1.5:3004  (VM2, co-located)
-#     rabbitmq mgmt    -> http://10.0.1.5:15672 (VM2)
+# Service routing (Kong → Docker service hostnames):
+#   joke-service     → http://joke-service:4000
+#   submit-service   → http://submit-service:4200
+#   moderate-service → http://moderate-service:4300
+#   etl-service      → http://etl-service:4001   (health only)
+#   rabbitmq mgmt    → http://rabbitmq:15672
 #
-# ACCESS URLS
-# -------------------------------------------------------------------------------
-#   Interface        Local                             Hosted
-#   ---------------- --------------------------------- --------------------------------
-#   Joke browse UI   http://localhost:8000/joke-ui     https://85.211.240.162/joke-ui
-#   Joke API         http://localhost:8000/joke/any    https://85.211.240.162/joke/any
-#   Submit UI        http://localhost:8000/submit      https://85.211.240.162/submit
-#   Swagger docs     http://localhost:8000/docs        https://85.211.240.162/docs
-#   Moderation UI    http://localhost:8000/moderate-ui https://85.211.240.162/moderate-ui
-#   RabbitMQ Admin   http://localhost:8000/mq-admin/   https://85.211.240.162/mq-admin/
-#                    credentials: guest / guest
-#
-# Auth0 config for LOCAL:  AUTH0_BASE_URL=http://localhost:8000
-#                          Callback: http://localhost:8000/callback
-#                          Logout:   http://localhost:8000/moderate-ui
-# Auth0 config for HOSTED: AUTH0_BASE_URL=https://85.211.240.162
-#                          Callback: https://85.211.240.162/callback
-#                          Logout:   https://85.211.240.162/moderate-ui
+# Public routes exposed through Kong (http://localhost:8000):
+#   GET  /joke/:type   → joke-service
+#   GET  /types        → submit-service (ECST cache)
+#   GET  /joke-ui      → joke-service frontend
+#   GET  /submit       → submit-service frontend
+#   POST /submit       → submit-service API
+#   GET  /docs         → submit-service Swagger UI
+#   GET  /moderate-ui  → moderate-service frontend (Auth0 protected)
+#   GET  /moderate     → moderate-service API (Auth0 protected)
+#   POST /moderated    → moderate-service API (Auth0 protected)
+#   POST /reject       → moderate-service API (Auth0 protected)
+#   *    /mq-admin     → RabbitMQ management UI
 # =============================================================================
 
 _format_version: "3.0"
 _transform: true
 
 # =============================================================================
-# Global Plugins -- applied to every request through Kong
+# Global Plugins - applied to every request through Kong
 # =============================================================================
 plugins:
   - name: correlation-id
@@ -53,15 +44,12 @@ plugins:
 services:
 
   # ---------------------------------------------------------------------------
-  # Joke Service
-  #   LOCAL:  Docker DNS joke-service:4000
-  #   HOSTED: http://10.0.1.4:3001
+  # Joke Service (Docker service: joke-service:4000)
   #
-  # GET /joke/:type  -> API -- fetch jokes by type
-  # GET /joke/any    -> API -- random joke
-  # GET /joke-ui     -> Joke Machine HTML frontend (strip_path removes prefix)
+  # GET /joke/:type  → API: fetch jokes by type
+  # GET /joke-ui     → Joke Machine HTML frontend
   #
-  # Rate limiting: 5 requests/minute per client IP (429 on breach)
+  # Rate limiting: 5 requests/minute per client IP.
   # ---------------------------------------------------------------------------
   - name: joke-service
     url:             http://joke-service:4000
@@ -76,6 +64,17 @@ services:
         strip_path:    false
         preserve_host: false
         methods:       [GET, HEAD, OPTIONS]
+        # Rate limiting applied at ROUTE level (not service level).
+        # This ensures /joke-ui (the frontend) is NOT rate-limited —
+        # only the /joke API endpoints are.
+        plugins:
+          - name: rate-limiting
+            config:
+              minute:              5
+              policy:              local
+              error_code:          429
+              error_message:       "Rate limit exceeded - Joke API allows 5 req/min. Retry after 60 seconds."
+              hide_client_headers: false
 
       - name:          joke-frontend-route
         paths:         [/joke-ui]
@@ -83,36 +82,13 @@ services:
         preserve_host: false
         methods:       [GET, HEAD, OPTIONS]
 
-      - name:          joke-health-route
-        paths:         [/joke-health]
-        strip_path:    true
-        preserve_host: false
-        methods:       [GET, HEAD]
-
-      - name:          types-from-joke-route
-        paths:         [/joke-types]
-        strip_path:    true
-        preserve_host: false
-        methods:       [GET, HEAD]
-
-    plugins:
-      - name: rate-limiting
-        config:
-          minute:              5
-          policy:              local
-          error_code:          429
-          error_message:       "Rate limit exceeded -- Joke API allows 5 req/min. Retry after 60 seconds."
-          hide_client_headers: false
-
   # ---------------------------------------------------------------------------
-  # Submit Service
-  #   LOCAL:  Docker DNS submit-service:4200
-  #   HOSTED: http://10.0.1.5:3002
+  # Submit Service (Docker service: submit-service:4200)
   #
-  # GET  /submit  -> Submit Joke HTML frontend (strip_path removes prefix)
-  # POST /submit  -> Joke submission API (publishes to submit RabbitMQ queue)
-  # GET  /types   -> Joke type list from local ECST cache (no call to joke-service)
-  # GET  /docs    -> Swagger / OpenAPI interactive documentation
+  # GET  /submit   → Submit Joke HTML frontend
+  # POST /submit   → Joke submission API (publishes to 'submit' queue)
+  # GET  /types    → Joke types via ECST cache (no HTTP proxy to joke-service)
+  # GET  /docs     → Swagger / OpenAPI documentation UI
   # ---------------------------------------------------------------------------
   - name: submit-service
     url:             http://submit-service:4200
@@ -153,23 +129,20 @@ services:
           minute:              10
           policy:              local
           error_code:          429
-          error_message:       "Rate limit exceeded -- Submit API allows 10 req/min. Retry after 60 seconds."
+          error_message:       "Rate limit exceeded - Submit API allows 10 req/min. Retry after 60 seconds."
           hide_client_headers: false
 
   # ---------------------------------------------------------------------------
-  # Moderate Service
-  #   LOCAL:  Docker DNS moderate-service:4300
-  #   HOSTED: http://10.0.1.5:3004
+  # Moderate Service (Docker service: moderate-service:4300)
   #
-  # Authentication is handled INSIDE the service via Auth0 OIDC.
-  # Kong proxies all requests without modification.
+  # Human moderators review jokes before they enter the database.
+  # Authentication handled inside the service via Auth0 OIDC.
   #
-  # GET  /moderate-ui  -> Moderation HTML frontend (strip_path removes prefix)
-  # GET  /moderate     -> Pull next joke from submit queue (Auth0 protected)
-  # POST /moderated    -> Approve joke -> push to moderated queue (Auth0 protected)
-  # POST /reject       -> Discard joke with nack (Auth0 protected)
-  # GET  /me           -> Authenticated user profile from Auth0 session
-  # *    /login /logout /callback  -> Auth0 OIDC flow (express-openid-connect)
+  # GET  /moderate-ui  → Moderation UI (HTML frontend)
+  # GET  /moderate     → Pull next joke from queue (API, Auth0 protected)
+  # POST /moderated    → Approve edited joke (API, Auth0 protected)
+  # POST /reject       → Discard joke (API, Auth0 protected)
+  # *    /login,/logout,/callback,/me → Auth0 OIDC flow endpoints
   # ---------------------------------------------------------------------------
   - name: moderate-service
     url:             http://moderate-service:4300
@@ -209,17 +182,15 @@ services:
         preserve_host: false
         methods:       [GET, POST, OPTIONS]
 
+      - name:          moderate-types-route
+        paths:         [/moderate-types]
+        strip_path:    false
+        preserve_host: false
+        methods:       [GET]
+
   # ---------------------------------------------------------------------------
-  # RabbitMQ Management UI
-  #   LOCAL:  Docker DNS rabbitmq:15672
-  #   HOSTED: http://10.0.1.5:15672
-  #
-  # The management UI is a single-page app (SPA):
-  #   - Entry point loads at /mq-admin/  (trailing slash required)
-  #   - Static assets  -> /mq-admin/js/, /mq-admin/img/ etc  (strip_path=true)
-  #   - API calls      -> absolute /api/...                   (strip_path=false)
-  #
-  # Access: /mq-admin/   credentials: guest / guest
+  # RabbitMQ Management UI (Docker service: rabbitmq:15672)
+  # Access: http://localhost:8000/mq-admin/  credentials: guest / guest
   # ---------------------------------------------------------------------------
   - name: rabbitmq-management
     url:             http://rabbitmq:15672
@@ -242,9 +213,8 @@ services:
         methods:       [GET, HEAD, POST, PUT, DELETE, OPTIONS]
 
   # ---------------------------------------------------------------------------
-  # ETL Service – Health endpoint only
-  #   LOCAL: Docker DNS etl-service:4001
-  # Allows operators to check ETL status via Kong without direct container access.
+  # ETL Service (Docker service: etl-service:4001)
+  # Health endpoint only — allows operators to verify ETL status via Kong.
   # ---------------------------------------------------------------------------
   - name: etl-service
     url:             http://etl-service:4001

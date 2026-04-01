@@ -31,22 +31,22 @@ plugins:
 services:
 
   # ---------------------------------------------------------------------------
-  # Joke Service — VM1 (${vm1_private_ip}:3001)
+  # Joke Service — VM1 (${vm1_private_ip}:3000)
   #
   # Route 1: /joke   (prefix, strip_path=false)  → API endpoints
   #   Kong receives:   GET /joke/programming
-  #   Forwards to:     GET http://${vm1_private_ip}:3001/joke/programming
+  #   Forwards to:     GET http://${vm1_private_ip}:3000/joke/programming
   #
   # Route 2: /joke-ui (strip_path=true)           → Joke Machine frontend HTML
   #   Kong receives:   GET /joke-ui
-  #   Forwards to:     GET http://${vm1_private_ip}:3001/
+  #   Forwards to:     GET http://${vm1_private_ip}:3000/
   #
   # Rate limiting: ${rate_limit_per_minute} requests/minute per client IP.
   # Demonstrating that a downstream service can be protected by Kong
   # without modifying the service itself.
   # ---------------------------------------------------------------------------
   - name: joke-service
-    url:              http://${vm1_private_ip}:3001
+    url:              http://${vm1_private_ip}:3000
     connect_timeout:  5000
     read_timeout:     10000
     write_timeout:    10000
@@ -58,25 +58,24 @@ services:
         strip_path:     false
         preserve_host:  false
         methods:        [GET, HEAD, OPTIONS]
+        plugins:
+          - name: rate-limiting
+            config:
+              minute:         ${rate_limit_per_minute}
+              policy:         local
+              error_code:     429
+              error_message:  "Rate limit exceeded — Joke API allows ${rate_limit_per_minute} req/min. Retry after 60 seconds."
+              hide_client_headers: false
 
       # Exposes the Joke Machine HTML frontend at /joke-ui through Kong
       - name:           joke-frontend-route
         paths:          [/joke-ui]
         strip_path:     true
         preserve_host:  false
-        methods:        [GET, OPTIONS]
-
-    plugins:
-      - name: rate-limiting
-        config:
-          minute:         ${rate_limit_per_minute}
-          policy:         local          # "local" = per Kong node, fine for single-VM demo
-          error_code:     429
-          error_message:  "Rate limit exceeded — Joke API allows ${rate_limit_per_minute} req/min. Retry after 60 seconds."
-          hide_client_headers: false    # expose X-RateLimit-Remaining-Minute header
+        methods:        [GET, HEAD, OPTIONS]
 
   # ---------------------------------------------------------------------------
-  # Submit Service - VM2 (${vm2_private_ip}:3002)
+  # Submit Service - VM2 (${vm2_private_ip}:3200)
   #
   # GET  /submit -> HTML frontend
   # POST /submit -> Joke submission API (publishes to 'submit' queue)
@@ -84,7 +83,7 @@ services:
   # GET  /docs   -> Swagger / OpenAPI documentation UI
   # ---------------------------------------------------------------------------
   - name: submit-service
-    url:              http://${vm2_private_ip}:3002
+    url:              http://${vm2_private_ip}:3200
     connect_timeout:  5000
     read_timeout:     10000
     write_timeout:    10000
@@ -102,6 +101,14 @@ services:
         strip_path:     false
         preserve_host:  false
         methods:        [POST]
+        plugins:
+          - name: rate-limiting
+            config:
+              minute:        10
+              policy:        local
+              error_code:    429
+              error_message: "Rate limit exceeded — Submit API allows 10 req/min. Retry after 60 seconds."
+              hide_client_headers: false
 
       - name:           submit-types-route
         paths:          [/types]
@@ -116,8 +123,8 @@ services:
         methods:        [GET]
 
   # ---------------------------------------------------------------------------
-  # Moderate Service - VM2 (${vm2_private_ip}:3004)  NEW - Option 4
-  # Co-located on VM2 alongside submit-service.
+  # Moderate Service - VM3 (${vm3_private_ip}:3300)
+  # Runs on the dedicated moderation VM.
   #
   # Auth0 OIDC authentication is handled inside the service (not by Kong).
   #
@@ -126,7 +133,7 @@ services:
   #            Add https://<KONG_PUBLIC_IP>/moderate-ui to Auth0 Allowed Logout URLs
   # ---------------------------------------------------------------------------
   - name: moderate-service
-    url:              http://${vm2_private_ip}:3004
+    url:              http://${vm3_private_ip}:3300
     connect_timeout:  5000
     read_timeout:     15000
     write_timeout:    10000
@@ -163,8 +170,14 @@ services:
         preserve_host:  false
         methods:        [GET, POST, OPTIONS]
 
+      - name:           moderate-types-route
+        paths:          [/moderate-types]
+        strip_path:     false
+        preserve_host:  false
+        methods:        [GET]
+
   # ---------------------------------------------------------------------------
-  # RabbitMQ Management UI - VM2 ($${vm2_private_ip}:15672)
+  # RabbitMQ Management UI - VM2 (${vm2_private_ip}:15672)
   #
   # The management UI is a SPA that:
   #   - loads at /mq-admin/   (trailing slash required — strip_path removes prefix)
@@ -187,9 +200,41 @@ services:
         strip_path:     true
         preserve_host:  false
         methods:        [GET, POST, PUT, DELETE, OPTIONS, HEAD]
+        plugins:
+          - name: ip-restriction
+            config:
+              allow:
+                - 10.0.0.0/8   # Azure VNet only — use SSH tunnel for external access
+                - 127.0.0.0/8  # Kong VM localhost
 
       - name:           mq-api-route
         paths:          [/api]
         strip_path:     false
         preserve_host:  false
         methods:        [GET, POST, PUT, DELETE, OPTIONS, HEAD]
+        plugins:
+          - name: ip-restriction
+            config:
+              allow:
+                - 10.0.0.0/8
+                - 127.0.0.0/8
+
+  # ---------------------------------------------------------------------------
+  # ETL Service — VM1 (co-located with joke-service on ${vm1_private_ip})
+  # Health endpoint only — allows operators to verify ETL status via Kong.
+  # ETL has no host port mapping by default; expose 3001:4001 in vm1-compose
+  # to make this route reachable.
+  # ---------------------------------------------------------------------------
+  - name: etl-service
+    url:              http://${vm1_private_ip}:3001
+    connect_timeout:  5000
+    read_timeout:     5000
+    write_timeout:    5000
+    retries:          1
+
+    routes:
+      - name:           etl-health-route
+        paths:          [/etl-health]
+        strip_path:     true
+        preserve_host:  false
+        methods:        [GET, HEAD]

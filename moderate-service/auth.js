@@ -42,14 +42,23 @@
 const { auth, requiresAuth: oidcRequiresAuth } = require('express-openid-connect');
 
 /**
- * Whether Auth0 is configured. All three env vars must be set to enable OIDC.
- * When false the service runs in "no-auth" mode: all requests are treated as
- * authenticated using a placeholder local user.
+ * Whether Auth0 is configured.
+ *
+ * Rules (in order):
+ *   1. If AUTH_ENABLED=false is set explicitly, always disable OIDC.
+ *   2. All three credentials must be present AND must not be the
+ *      placeholder strings written into .env.example / local .env.
+ *      This prevents the dev .env placeholders from accidentally
+ *      enabling OIDC (which would error or block all requests).
  */
-const AUTH_ENABLED = !!(
-  process.env.AUTH0_CLIENT_ID &&
-  process.env.AUTH0_ISSUER_BASE_URL &&
-  process.env.AUTH0_SECRET
+function _isRealCredential(v) {
+  return !!v && !v.startsWith('REPLACE_') && !v.includes('YOUR_TENANT') && v !== 'CHANGE_ME';
+}
+
+const AUTH_ENABLED = process.env.AUTH_ENABLED !== 'false' && (
+  _isRealCredential(process.env.AUTH0_CLIENT_ID) &&
+  _isRealCredential(process.env.AUTH0_ISSUER_BASE_URL) &&
+  _isRealCredential(process.env.AUTH0_SECRET)
 );
 
 /**

@@ -22,6 +22,8 @@ services:
 
   # ───────────────────────────────────────────────────────
   # MySQL 8 – used when DB_TYPE=mysql (default)
+  # No profiles: MySQL always starts with `docker-compose up`.
+  # MongoDB is opt-in: add --profile mongo to start it.
   # ───────────────────────────────────────────────────────
   mysql:
     image: mysql:8.0
@@ -38,9 +40,6 @@ services:
       - "3306:3306"
     networks:
       - jokes_network
-    profiles:
-      - mysql
-      - default
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost",
              "-u", "root", "--password=${DB_ROOT_PASSWORD}"]
@@ -249,6 +248,8 @@ services:
       submit-service:
         condition: service_started
       moderate-service:
+        condition: service_started
+      etl-service:
         condition: service_started
       rabbitmq:
         condition: service_healthy

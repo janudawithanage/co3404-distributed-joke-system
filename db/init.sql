@@ -49,7 +49,10 @@ INSERT IGNORE INTO types (name) VALUES
   ('science');
 
 -- Insert sample jokes (type_id resolved via subquery)
-INSERT INTO jokes (setup, punchline, type_id) VALUES
+-- INSERT IGNORE: safe to re-run — skips rows that already match the
+-- UNIQUE KEY uq_joke (setup, punchline) constraint, e.g. if the container
+-- was restarted after the volume was partially written (edge case).
+INSERT IGNORE INTO jokes (setup, punchline, type_id) VALUES
   (
     'Why don\'t scientists trust atoms?',
     'Because they make up everything!',

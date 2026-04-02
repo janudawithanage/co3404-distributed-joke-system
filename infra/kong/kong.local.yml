@@ -287,6 +287,12 @@ services:
   # ---------------------------------------------------------------------------
   # ETL Service (Docker service: etl-service:4001)
   # Health endpoint only — allows operators to verify ETL status via Kong.
+  #
+  # How the path rewrite works:
+  #   Service URL:  http://etl-service:4001/health
+  #   Route path:   /etl-health   strip_path: true
+  #   → Kong strips /etl-health from the path (leaves ''), appends '' to
+  #     service URL → upstream sees GET /health  ✓
   # ---------------------------------------------------------------------------
   - name: etl-service
     url:             http://etl-service:4001/health

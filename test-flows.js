@@ -116,16 +116,16 @@ async function drainQueue(modUrl) {
   for (const [label, path] of [
     ['Kong → joke /joke/any',  '/joke/any'],
     ['Kong → submit /types',   '/types'],
-    ['Kong → moderate /health','/health'],   // /health not routed — should 404
+    ['Kong → joke /health',    '/health'],    // /health routes to joke-service
     ['Kong → etl /etl-health', '/etl-health'],
   ]) {
     try {
       const r = await request(KONG + path);
       const hasKongId = !!r.headers['kong-request-id'];
       const detail = `HTTP ${r.code}, Kong-Request-ID: ${hasKongId ? 'present' : 'MISSING'}`;
-      // /health is not a Kong route; /etl-health is explicitly routed.
       if (path === '/health') {
-        r.code === 404 ? pass(label+' (correctly 404 — unrouted path)', detail) : warn(label, detail);
+        // /health is deliberately routed to joke-service as the gateway health check.
+        r.code === 200 ? pass(label, detail) : fail(label, detail);
       } else if (path === '/etl-health') {
         r.code === 200 ? pass(label, detail) : fail(label, detail);
       } else if (r.code < 400) {

@@ -17,6 +17,9 @@ const state = {
   types: []
 };
 
+// Tracks the auto-dismiss timer for the homepage inline submit alert.
+let _homeSubmitTimer = null;
+
 function withBase(base, path) {
   if (!path.startsWith('/')) path = `/${path}`;
   return `${base}${path}`;
@@ -26,7 +29,9 @@ function withBase(base, path) {
 async function loadTypes() {
   try {
     const res = await fetch(withBase(bases.gateway, '/types'));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const types = await res.json();
+    if (!Array.isArray(types)) throw new Error('unexpected response');
     state.types = types;
 
     const typeSelect   = document.getElementById('typeSelect');
@@ -46,6 +51,7 @@ async function loadTypes() {
     document.getElementById('metric-types').textContent = types.length;
   } catch (err) {
     console.warn('[home] failed to load types', err);
+    document.getElementById('metric-types').textContent = '—';
   }
 }
 
@@ -97,7 +103,11 @@ async function getJokes() {
     const res = await fetch(withBase(bases.gateway, `/joke/${encodeURIComponent(type)}?count=${count}`));
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      box.innerHTML = `<p style="color:var(--danger);">${escapeHtml(err.error || 'Unable to fetch jokes')}</p>`;
+      // Kong 429 returns { message: '...' }; service errors return { error: '...' }
+      const msg = res.status === 429
+        ? (err.message || err.error || 'Rate limit exceeded — Joke API allows 5 requests/min. Please wait 60 seconds.')
+        : (err.message || err.error || 'Unable to fetch jokes. Please try again.');
+      box.innerHTML = `<p style="color:var(--danger);">⚠️ ${escapeHtml(msg)}</p>`;
       return;
     }
 
@@ -118,6 +128,9 @@ async function getJokes() {
 
 /* ── Submit from homepage (through gateway) ──────────────── */
 async function submitFromHome() {
+  // Cancel any pending auto-dismiss from a prior successful submission
+  if (_homeSubmitTimer) { clearTimeout(_homeSubmitTimer); _homeSubmitTimer = null; }
+
   const setup     = document.getElementById('submit-setup').value.trim();
   const punchline = document.getElementById('submit-punchline').value.trim();
   const type      = document.getElementById('submit-type').value.trim();
@@ -143,12 +156,17 @@ async function submitFromHome() {
     const body = await res.json().catch(() => ({}));
     if (res.ok) {
       alertBox.style.color = 'var(--success)';
-      alertBox.textContent = 'Queued for human moderation. Thank you!';
+      alertBox.textContent = '✅ Queued for human moderation. Thank you!';
       document.getElementById('submit-setup').value = '';
       document.getElementById('submit-punchline').value = '';
+      // Reset the type selector back to the placeholder option
+      const typeEl = document.getElementById('submit-type');
+      if (typeEl) typeEl.selectedIndex = 0;
+      // Auto-clear success message after 6 seconds
+      _homeSubmitTimer = setTimeout(() => { alertBox.textContent = ''; _homeSubmitTimer = null; }, 6000);
     } else {
       alertBox.style.color = 'var(--danger)';
-      alertBox.textContent = body.error || 'Submission failed.';
+      alertBox.textContent = body.error || body.message || 'Submission failed.';
     }
   } catch (err) {
     alertBox.style.color = 'var(--danger)';
@@ -159,15 +177,20 @@ async function submitFromHome() {
   }
 }
 
-/* ── Health indicator (uses joke-service health) ─────────── */
+/* ── Health indicator (via gateway /health route) ────────── */
 async function loadHealth() {
   const el = document.getElementById('health-indicator');
   try {
-    const res = await fetch(withBase(bases.joke, '/health'));
+    const res = await fetch(withBase(bases.gateway, '/health'));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
-    el.textContent = `Joke service ${json.status}. DB: ${json.dbType}`;
+    if (json.status !== 'ok') throw new Error(json.status || 'non-ok status');
+    const db = (json.dbType || 'db').toUpperCase();
+    el.style.color = 'var(--success)';
+    el.textContent = `✅ Online · ${db}`;
   } catch (_) {
-    el.textContent = 'Health check unavailable.';
+    el.style.color = 'var(--danger)';
+    el.textContent = '❌ Unavailable';
   }
 }
 

@@ -308,9 +308,9 @@ ssh -i ~/.ssh/co3404_key azureuser@<VM3_IP> "cd ~/moderate && docker compose pul
 ```
 
 GitHub Actions secrets required for CI/CD:
-`DOCKER_USERNAME`, `DOCKER_PASSWORD`, `VM3_HOST`, `VM3_USER`, `VM3_SSH_KEY`,
-`AUTH0_SECRET`, `AUTH0_BASE_URL`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, `AUTH0_ISSUER_BASE_URL`,
-`RABBITMQ_HOST`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
+`DOCKER_HUB_USERNAME`, `DOCKER_HUB_TOKEN`, `VM3_HOST`, `VM3_SSH_PRIVATE_KEY`
+
+The VM3 compose env file still needs valid runtime values for Auth0 and RabbitMQ (`AUTH0_*`, `RABBITMQ_*`).
 
 ### Step 4 -- Kong (VM4)
 

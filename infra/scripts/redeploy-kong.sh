@@ -19,11 +19,17 @@
 # =============================================================================
 set -euo pipefail
 
-KONG_IP="85.211.240.162"
+KONG_IP="${KONG_IP:-}"
 SSH_KEY="$HOME/.ssh/co3404_key"
 SSH_USER="azureuser"
 KONG_YML_LOCAL="infra/kong/kong.yml"
 REMOTE_KONG_DIR="/home/azureuser/kong"
+
+if [ -z "$KONG_IP" ]; then
+  echo "❌  ERROR: KONG_IP is not set."
+  echo "    Usage: KONG_IP=<KONG_PUBLIC_IP> ./infra/scripts/redeploy-kong.sh"
+  exit 1
+fi
 
 echo "📋  Pre-flight: Validating local kong.yml exists…"
 if [ ! -f "$KONG_YML_LOCAL" ]; then

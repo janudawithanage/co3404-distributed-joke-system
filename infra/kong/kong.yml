@@ -294,6 +294,12 @@ services:
   # ---------------------------------------------------------------------------
   # ETL Service - VM1 (co-located with joke-service on 10.0.1.4:3001)
   # Health endpoint only — allows operators to verify ETL status via Kong.
+  #
+  # How the path rewrite works:
+  #   Service URL:  http://10.0.1.4:3001/health
+  #   Route path:   /etl-health   strip_path: true
+  #   → Kong strips /etl-health from the path (leaves ''), appends '' to
+  #     service URL → upstream sees GET /health  ✓
   # ---------------------------------------------------------------------------
   - name: etl-service
     url:             http://10.0.1.4:3001/health

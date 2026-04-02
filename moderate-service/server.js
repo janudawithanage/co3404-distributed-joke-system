@@ -35,7 +35,15 @@ const fs      = require('fs').promises;
 const helmet  = require('helmet');
 
 const { connect, getNextJoke, approveJoke, rejectJoke, isReady } = require('./rabbitmq');
-const { auth, buildAuthConfig, requiresAuth, requiresAuthJson, AUTH_ENABLED }  = require('./auth');
+const {
+  auth,
+  buildAuthConfig,
+  requiresAuthJson,
+  requiresModeratorRoleJson,
+  noAuthMiddleware,
+  AUTH_ENABLED,
+  getAuthMode
+} = require('./auth');
 
 const app  = express();
 const PORT = process.env.PORT || 4300;
@@ -88,20 +96,61 @@ if (AUTH_ENABLED) {
   console.log('[Auth] Auth0 OIDC enabled — baseURL:', process.env.AUTH0_BASE_URL);
   app.use(auth(buildAuthConfig(PORT)));
 } else {
-  console.warn('[Auth] Auth0 NOT configured — running in unauthenticated mode. Set AUTH0_* env vars to enable.');
-  // Inject mock oidc so requiresAuth/requiresAuthJson middleware still pass
-  app.use((req, _res, next) => {
-    req.oidc = {
-      isAuthenticated: () => true,
-      user: { name: 'Moderator (Auth Disabled)', email: 'moderator@local', picture: null }
-    };
-    next();
-  });
+  const mode = getAuthMode();
+  if (mode === 'dev') {
+    console.info(
+      '[Auth] Auth0 disabled via AUTH_ENABLED=false — running in dev/demo mode.\n' +
+      '       Do NOT use this mode on a public server.'
+    );
+  } else {
+    // 'unconfigured' mode: credentials are still placeholder strings.
+    // This is the Azure state when .env.vm3 has not been filled in.
+    console.warn(
+      '[Auth] \u26a0\ufe0f  SECURITY WARNING: Auth0 credentials not configured.\n' +
+      '       Moderation endpoints (GET /moderate, POST /moderated, POST /reject) are\n' +
+      '       accessible to ANY network peer without a login.\n' +
+      '       Set AUTH0_SECRET, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET,\n' +
+      '       AUTH0_ISSUER_BASE_URL and AUTH0_BASE_URL in infra/.env.vm3\n' +
+      '       then redeploy to enforce Auth0 login (BUG-H6 fix).'
+    );
+  }
+  // Inject a mock req.oidc so requiresAuthJson / requiresModeratorRoleJson still
+  // compile a response — they check isAuthenticated() which returns true here.
+  app.use(noAuthMiddleware);
   // Stub OIDC routes so Kong's moderate-auth-route returns 302 instead of 404
   app.get('/login',    (_req, res) => res.redirect('/moderate-ui'));
   app.get('/logout',   (_req, res) => res.redirect('/moderate-ui'));
   app.get('/callback', (_req, res) => res.redirect('/moderate-ui'));
 }
+
+// Attach X-Auth-Mode header to every response so operators can verify the mode
+// without reading logs:  curl -sI https://<KONG_IP>/health | grep X-Auth-Mode
+app.use((_req, res, next) => { res.setHeader('X-Auth-Mode', getAuthMode()); next(); });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /auth-status — PUBLIC
+//
+// Returns the current authentication mode. Consumed by:
+//   - The moderation UI (shows warning banner when auth is not configured).
+//   - Operators: curl https://<KONG_IP>/auth-status
+//
+// Responses:
+//   { authEnabled: true,  mode: 'oidc' }
+//   { authEnabled: false, mode: 'dev',          warning: '...' }
+//   { authEnabled: false, mode: 'unconfigured',  warning: '...' }
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/auth-status', (_req, res) => {
+  const mode    = getAuthMode();
+  const payload = { authEnabled: AUTH_ENABLED, mode };
+  if (mode !== 'oidc') {
+    payload.warning = mode === 'dev'
+      ? 'Authentication explicitly disabled (AUTH_ENABLED=false). Dev/demo mode — not for production.'
+      : 'Auth0 credentials not configured. Moderation endpoints are accessible to any network peer. ' +
+        'Set AUTH0_SECRET, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET, AUTH0_ISSUER_BASE_URL ' +
+        'and AUTH0_BASE_URL in infra/.env.vm3 then redeploy to enforce login (BUG-H6 fix).';
+  }
+  res.json(payload);
+});
 
 // Serve static files from /public
 // Kong routes /moderate-ui with strip_path:true, so the service always receives /
@@ -157,7 +206,7 @@ app.get('/moderate-types', serveTypesCache);
 //   204 (empty body)                  — queue is empty, poll again
 //   503 { error }                     — RabbitMQ unavailable
 // ─────────────────────────────────────────────────────────────────────────────
-app.get('/moderate', requiresAuthJson, async (req, res) => {
+app.get('/moderate', requiresAuthJson, requiresModeratorRoleJson, async (req, res) => {
   if (!isReady()) {
     return res.status(503).json({
       error: 'Message broker unavailable — please try again shortly'
@@ -195,7 +244,7 @@ app.get('/moderate', requiresAuthJson, async (req, res) => {
 // ECST note: The moderator may edit the joke type. If the new type doesn't
 // exist yet, ETL will create it and emit a type_update event back.
 // ─────────────────────────────────────────────────────────────────────────────
-app.post('/moderated', requiresAuthJson, async (req, res) => {
+app.post('/moderated', requiresAuthJson, requiresModeratorRoleJson, async (req, res) => {
   const { setup, punchline, type } = req.body;
 
   if (!setup || !punchline || !type) {
@@ -240,7 +289,7 @@ app.post('/moderated', requiresAuthJson, async (req, res) => {
 // Moderator rejects the current pending joke.
 // The joke is nacked with requeue=false → permanently discarded.
 // ─────────────────────────────────────────────────────────────────────────────
-app.post('/reject', requiresAuthJson, async (req, res) => {
+app.post('/reject', requiresAuthJson, requiresModeratorRoleJson, async (req, res) => {
   try {
     await rejectJoke();
     console.log('[Moderate] ❌ Joke rejected and discarded');
@@ -258,9 +307,10 @@ app.post('/reject', requiresAuthJson, async (req, res) => {
 app.get('/me', requiresAuthJson, (req, res) => {
   const user = req.oidc.user;
   res.json({
-    name:    user.name  || user.nickname || user.email,
-    email:   user.email || '',
-    picture: user.picture || null
+    name:        user.name    || user.nickname || user.email,
+    email:       user.email   || '',
+    picture:     user.picture || null,
+    authEnabled: AUTH_ENABLED  // consumed by the UI to show the auth-warning banner
   });
 });
 

@@ -12,17 +12,23 @@
 #   rabbitmq mgmt    → http://rabbitmq:15672
 #
 # Public routes exposed through Kong (http://localhost:8000):
-#   GET  /joke/:type   → joke-service
-#   GET  /types        → submit-service (ECST cache)
-#   GET  /joke-ui      → joke-service frontend
-#   GET  /submit       → submit-service frontend
-#   POST /submit       → submit-service API
-#   GET  /docs         → submit-service Swagger UI
-#   GET  /moderate-ui  → moderate-service frontend (Auth0 protected)
-#   GET  /moderate     → moderate-service API (Auth0 protected)
-#   POST /moderated    → moderate-service API (Auth0 protected)
-#   POST /reject       → moderate-service API (Auth0 protected)
-#   *    /mq-admin     → RabbitMQ management UI
+#   GET  /joke/:type       → joke-service API
+#   GET  /health           → joke-service health check
+#   GET  /config.js        → runtime config (gatewayBase, jokeServiceBase, etc.)
+#   GET  /types            → submit-service ECST types cache
+#   GET  /joke-ui          → joke-service frontend
+#   GET  /submit           → submit-service frontend
+#   POST /submit           → submit-service API
+#   GET  /docs             → submit-service Swagger UI
+#   GET  /moderate-ui      → moderate-service frontend (Auth0 protected)
+#   GET  /moderate         → moderate-service API (Auth0 protected)
+#   POST /moderated        → moderate-service API (Auth0 protected)
+#   POST /reject           → moderate-service API (Auth0 protected)
+#   GET  /moderate-types   → moderate-service ECST types cache
+#   *    /login,/logout,/callback,/me  → Auth0 OIDC flow (moderate-service)
+#   *    /mq-admin         → RabbitMQ management UI (IP-restricted)
+#   *    /api              → RabbitMQ management API (IP-restricted)
+#   GET  /etl-health       → ETL service health check
 # =============================================================================
 
 _format_version: "3.0"
@@ -82,6 +88,25 @@ services:
         preserve_host: false
         methods:       [GET, HEAD, OPTIONS]
 
+      # Route /health → joke-service health check
+      # Required by the Joke UI dashboard "System Status" stat card.
+      # Without this route the card stays stuck on "Checking…" (BUG-L1).
+      - name:          joke-health-route
+        paths:         [/health]
+        strip_path:    false
+        preserve_host: false
+        methods:       [GET, HEAD]
+
+      # Route /config.js → runtime config injected by joke-service
+      # Delivers window.APP_CONFIG so the frontend's app.js knows the
+      # Kong gateway base URL for all subsequent API calls.
+      # Without this the "Joke Types" stat card shows "—" (BUG-L2).
+      - name:          joke-config-route
+        paths:         [/config.js]
+        strip_path:    false
+        preserve_host: false
+        methods:       [GET, HEAD]
+
   # ---------------------------------------------------------------------------
   # Submit Service (Docker service: submit-service:4200)
   #
@@ -109,28 +134,26 @@ services:
         strip_path:    false
         preserve_host: false
         methods:       [POST]
+        plugins:
+          - name: rate-limiting
+            config:
+              minute:              10
+              policy:              local
+              error_code:          429
+              error_message:       "Rate limit exceeded - Submit API allows 10 req/min. Retry after 60 seconds."
+              hide_client_headers: false
 
       - name:          types-route
         paths:         [/types]
         strip_path:    false
         preserve_host: false
-        methods:       [GET]
+        methods:       [GET, HEAD]
 
       - name:          docs-route
         paths:         [/docs]
         strip_path:    false
         preserve_host: false
         methods:       [GET, HEAD]
-
-    plugins:
-      - name: rate-limiting
-        route: submit-api-route
-        config:
-          minute:              10
-          policy:              local
-          error_code:          429
-          error_message:       "Rate limit exceeded - Submit API allows 10 req/min. Retry after 60 seconds."
-          hide_client_headers: false
 
   # ---------------------------------------------------------------------------
   # Moderate Service (Docker service: moderate-service:4300)
@@ -163,21 +186,47 @@ services:
         strip_path:    false
         preserve_host: false
         methods:       [GET, HEAD]
+        # Defense-in-depth: rate-limit polling regardless of auth mode.
+        # 60 req/min = 1 poll/sec max, matching the UI's POLL_MIN interval.
+        plugins:
+          - name: rate-limiting
+            config:
+              minute:              60
+              policy:              local
+              error_code:          429
+              error_message:       "Rate limit exceeded - Moderation poll allows 60 req/min."
+              hide_client_headers: false
 
       - name:          moderated-post-route
         paths:         [/moderated]
         strip_path:    false
         preserve_host: false
         methods:       [POST, OPTIONS]
+        plugins:
+          - name: rate-limiting
+            config:
+              minute:              30
+              policy:              local
+              error_code:          429
+              error_message:       "Rate limit exceeded - Approve endpoint allows 30 req/min."
+              hide_client_headers: false
 
       - name:          reject-route
         paths:         [/reject]
         strip_path:    false
         preserve_host: false
         methods:       [POST, OPTIONS]
+        plugins:
+          - name: rate-limiting
+            config:
+              minute:              30
+              policy:              local
+              error_code:          429
+              error_message:       "Rate limit exceeded - Reject endpoint allows 30 req/min."
+              hide_client_headers: false
 
       - name:          moderate-auth-route
-        paths:         [/login, /logout, /callback, /me]
+        paths:         [/login, /logout, /callback, /me, /auth-status]
         strip_path:    false
         preserve_host: false
         methods:       [GET, POST, OPTIONS]
@@ -186,11 +235,16 @@ services:
         paths:         [/moderate-types]
         strip_path:    false
         preserve_host: false
-        methods:       [GET]
+        methods:       [GET, HEAD]
 
   # ---------------------------------------------------------------------------
   # RabbitMQ Management UI (Docker service: rabbitmq:15672)
   # Access: http://localhost:8000/mq-admin/  credentials: guest / guest
+  #
+  # SECURITY: ip-restriction restricts access to Docker-internal addresses
+  # only (172.16.0.0/12 covers all Docker bridge subnets).  The host machine
+  # reaches Kong over the Docker bridge gateway (e.g. 172.18.0.1) which is
+  # inside that range.  External network peers are blocked (BUG-L5).
   # ---------------------------------------------------------------------------
   - name: rabbitmq-management
     url:             http://rabbitmq:15672
@@ -205,19 +259,37 @@ services:
         strip_path:    true
         preserve_host: false
         methods:       [GET, HEAD, POST, PUT, DELETE, OPTIONS]
+        plugins:
+          - name: ip-restriction
+            config:
+              allow:
+                - 127.0.0.0/8      # loopback
+                - 172.16.0.0/12    # Docker bridge subnets (172.17–172.31.x.x)
+                - 10.0.0.0/8       # any custom Docker/Compose internal range
+              deny:
+                - 0.0.0.0/0        # deny everything else explicitly
 
       - name:          mq-api-route
         paths:         [/api]
         strip_path:    false
         preserve_host: false
         methods:       [GET, HEAD, POST, PUT, DELETE, OPTIONS]
+        plugins:
+          - name: ip-restriction
+            config:
+              allow:
+                - 127.0.0.0/8
+                - 172.16.0.0/12
+                - 10.0.0.0/8
+              deny:
+                - 0.0.0.0/0
 
   # ---------------------------------------------------------------------------
   # ETL Service (Docker service: etl-service:4001)
   # Health endpoint only — allows operators to verify ETL status via Kong.
   # ---------------------------------------------------------------------------
   - name: etl-service
-    url:             http://etl-service:4001
+    url:             http://etl-service:4001/health
     connect_timeout: 5000
     read_timeout:    5000
     write_timeout:   5000

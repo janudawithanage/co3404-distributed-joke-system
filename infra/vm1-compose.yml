@@ -83,8 +83,17 @@ services:
   # No ports[] mapping -- purely internal worker.
   # RABBITMQ_HOST points to VM2's private IP (10.0.1.5).
   # DB is accessed via internal Docker DNS "mysql" (or MONGO_URI for MongoDB).
+  #
+  # Image strategy:
+  #   - If ETL_IMAGE is set in .env.vm1 (populated by deploy-etl.yml CI/CD),
+  #     the pre-built Docker Hub image is used (no rebuild needed on the VM).
+  #   - If ETL_IMAGE is unset, falls back to build: ./etl-service so that
+  #     the first-run deploy.sh workflow continues to work without CI/CD.
   etl-service:
-    build: ./etl-service
+    image: ${ETL_IMAGE:-}
+    build:
+      context: ./etl-service
+      dockerfile: Dockerfile
     container_name: jokes_etl_service
     environment:
       DB_TYPE:           ${DB_TYPE:-mysql}   # 'mysql' or 'mongo'

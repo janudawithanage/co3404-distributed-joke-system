@@ -23,9 +23,23 @@ async function loadTypes() {
 
   try {
     const res   = await fetch(withBase('/types'));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const types = await res.json();
+    if (!Array.isArray(types)) throw new Error('unexpected response format');
+
+    // Preserve any current selection across reloads
+    const previousValue = sel.value;
 
     sel.innerHTML = '';
+
+    // Blank placeholder so nothing is pre-selected on first load
+    const placeholder       = document.createElement('option');
+    placeholder.value       = '';
+    placeholder.textContent = 'Select type…';
+    placeholder.disabled    = true;
+    placeholder.selected    = !previousValue;
+    sel.appendChild(placeholder);
+
     types.forEach(t => {
       const opt       = document.createElement('option');
       opt.value       = t.name;
@@ -33,18 +47,20 @@ async function loadTypes() {
       sel.appendChild(opt);
     });
 
-    // Append a "custom" sentinel option
+    // Sentinel option — always last; triggers custom free-text input
     const customOpt       = document.createElement('option');
     customOpt.value       = '__custom__';
     customOpt.textContent = '＋ Custom type…';
     sel.appendChild(customOpt);
 
-    // Show/hide free-text input based on selection
-    sel.addEventListener('change', () => {
-      const isCustom       = sel.value === '__custom__';
-      custom.style.display = isCustom ? 'block' : 'none';
-      if (isCustom) custom.focus();
-    });
+    // Restore previous selection if still valid
+    if (previousValue && [...sel.options].some(o => o.value === previousValue)) {
+      sel.value = previousValue;
+    }
+
+    // NOTE: the 'change' listener that toggles typeCustom visibility is
+    // registered once in DOMContentLoaded — NOT here — to prevent duplication
+    // on retry/reload calls.
 
   } catch (err) {
     console.warn('[Submit UI] Could not load types, showing text input');
@@ -67,13 +83,19 @@ function setupCharCounter(inputId, countId, max) {
 }
 
 /* ── Alert helper ────────────────────────────────────────── */
+// Tracks the auto-dismiss timer so rapid successive submissions
+// cannot have an old timer hide a newer success message.
+let _alertTimer = null;
+
 function showAlert(msg, kind) {
+  if (_alertTimer) { clearTimeout(_alertTimer); _alertTimer = null; }
   const box = document.getElementById('alertBox');
   box.textContent = msg;
   box.className   = `alert visible alert-${kind}`;
   if (kind === 'success') {
-    setTimeout(() => {
+    _alertTimer = setTimeout(() => {
       box.classList.remove('visible');
+      _alertTimer = null;
     }, 5000);
   }
 }
@@ -148,7 +170,15 @@ document.addEventListener('DOMContentLoaded', () => {
   setupCharCounter('punchline', 'punchline-count', 500);
 
   document.getElementById('submitBtn').addEventListener('click', submitJoke);
-
+  // Toggle custom type text input when sentinel option is selected.
+  // Registered ONCE here (not inside loadTypes) to prevent listener duplication.
+  const sel    = document.getElementById('typeSelect');
+  const custom = document.getElementById('typeCustom');
+  sel.addEventListener('change', () => {
+    const isCustom       = sel.value === '__custom__';
+    custom.style.display = isCustom ? 'block' : 'none';
+    if (isCustom) custom.focus();
+  });
   // Keyboard shortcut: Ctrl/Cmd+Enter to submit
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {

@@ -40,5 +40,5 @@ moderate_docker_image = "your-dockerhub-username/moderate-service:latest"
 # ssh_private_key_path  = "~/.ssh/co3404_key"
 # vm1_private_ip        = "10.0.1.4"
 # vm2_private_ip        = "10.0.1.5"
-# vm3_private_ip        = "10.0.1.6"
+# vm3_private_ip        = "10.0.1.7"
 # rate_limit_per_minute = 5

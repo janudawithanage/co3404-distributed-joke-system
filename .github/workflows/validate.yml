@@ -1,0 +1,51 @@
+name: Validate Repository
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Syntax check service JS
+        run: |
+          set -e
+          find joke-service submit-service moderate-service etl-service -name '*.js' -maxdepth 3 -print0 | xargs -0 -n1 node --check
+
+      - name: Syntax check integration test
+        run: node --check test-flows.js
+
+      - name: Validate root Docker Compose (local dev)
+        run: docker compose config > /tmp/compose.out
+
+      - name: Validate VM Compose files
+        # Validates all three VM compose files. Uses dummy env vars so
+        # Docker Compose does not fail on unset ${VAR} substitutions.
+        # A non-zero exit here means a service definition is malformed.
+        run: |
+          set -e
+          for f in infra/vm1-compose.yml infra/vm2-compose.yml infra/vm3-compose.yml; do
+            echo "Validating $f..."
+            env \
+              DB_ROOT_PASSWORD=x DB_NAME=x DB_USER=x DB_PASSWORD=x \
+              MONGO_URI=x PUBLIC_GATEWAY_BASE=x \
+              JOKE_IMAGE=user/joke-service:latest \
+              RABBITMQ_USER=x RABBITMQ_PASSWORD=x \
+              SUBMIT_IMAGE=user/submit-service:latest \
+              RABBITMQ_HOST=x \
+              DOCKER_IMAGE=user/moderate-service:latest \
+              AUTH0_SECRET=x AUTH0_BASE_URL=x AUTH0_CLIENT_ID=x \
+              AUTH0_CLIENT_SECRET=x AUTH0_ISSUER_BASE_URL=x \
+              docker compose -f "$f" config > /dev/null
+            echo "  ✅ $f is valid"
+          done

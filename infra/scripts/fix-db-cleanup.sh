@@ -64,4 +64,4 @@ echo "✅  Cleanup complete"
 SQLSH
 
 echo ""
-echo "✅  DB cleanup done. Run curl https://85.211.240.162/types to verify clean types list."
+echo "✅  DB cleanup done. Verify via Kong: curl https://<KONG_PUBLIC_IP>/types"

@@ -185,6 +185,20 @@
       .header-left h1 { font-size: 26px; }
       .actions { grid-template-columns: 1fr; }
     }
+
+    /* ── Auth Warning Banner ─────────────────────────────── */
+    #auth-warning {
+      position: relative; z-index: 1;
+      width: 100%; max-width: 760px;
+      background: rgba(255, 165, 0, 0.08);
+      border: 1px solid rgba(255, 165, 0, 0.4);
+      border-radius: 16px; padding: 14px 18px;
+      display: none; gap: 10px; align-items: flex-start;
+    }
+    #auth-warning.visible { display: flex; }
+    #auth-warning .warn-icon { font-size: 20px; flex-shrink: 0; margin-top: 1px; }
+    #auth-warning strong { color: #ffaa00; font-size: 14px; display: block; margin-bottom: 4px; }
+    #auth-warning p { font-size: 13px; color: var(--muted); line-height: 1.5; margin: 0; }
   </style>
 </head>
 <body>
@@ -200,6 +214,17 @@
       <button class="logout-btn" id="logout-btn">Logout</button>
     </div>
   </header>
+
+  <!-- Auth security warning — shown when Auth0 is not configured.
+       The banner is hidden by default and made visible by app.js when the
+       /me endpoint returns authEnabled:false. -->
+  <div id="auth-warning">
+    <span class="warn-icon">⚠️</span>
+    <div>
+      <strong>Authentication Disabled</strong>
+      <p id="auth-warning-text"></p>
+    </div>
+  </div>
 
   <!-- Session Stats -->
   <div class="stats-bar">

@@ -55,11 +55,40 @@ function _isRealCredential(v) {
   return !!v && !v.startsWith('REPLACE_') && !v.includes('YOUR_TENANT') && v !== 'CHANGE_ME';
 }
 
-const AUTH_ENABLED = process.env.AUTH_ENABLED !== 'false' && (
+// True when all three Auth0 credentials are present and non-placeholder.
+const AUTH_CREDENTIALS_PRESENT = (
   _isRealCredential(process.env.AUTH0_CLIENT_ID) &&
   _isRealCredential(process.env.AUTH0_ISSUER_BASE_URL) &&
   _isRealCredential(process.env.AUTH0_SECRET)
 );
+
+// True when AUTH_ENABLED=false is explicitly set — the correct opt-out for local dev.
+// Never set this in production; use real credentials instead.
+const AUTH_EXPLICITLY_DISABLED = process.env.AUTH_ENABLED === 'false';
+
+/**
+ * AUTH_ENABLED — the runtime auth gate.
+ *
+ * Three operating modes (check getAuthMode() for granular status):
+ *   'oidc'         → real credentials present  → Auth0 login required
+ *   'dev'          → AUTH_ENABLED=false set     → passthrough, local dev only
+ *   'unconfigured' → placeholder credentials, no explicit disable
+ *                    → passthrough WITH a loud startup warning
+ *                    → do NOT leave like this in production
+ */
+const AUTH_ENABLED = !AUTH_EXPLICITLY_DISABLED && AUTH_CREDENTIALS_PRESENT;
+
+/**
+ * Returns the current auth operating mode as a string.
+ *   'oidc'         — credentials present → Auth0 login enforced
+ *   'dev'          — explicitly disabled (AUTH_ENABLED=false) → passthrough
+ *   'unconfigured' — placeholder credentials → passthrough with warning
+ */
+function getAuthMode() {
+  if (AUTH_ENABLED)             return 'oidc';
+  if (AUTH_EXPLICITLY_DISABLED) return 'dev';
+  return 'unconfigured';
+}
 
 /**
  * Build the OIDC middleware configuration from environment variables.
@@ -71,7 +100,7 @@ function buildAuthConfig(port) {
     secret: process.env.AUTH0_SECRET || 'CHANGE_ME_GENERATE_WITH_CRYPTO_RANDOMBYTES_32',
 
     // Public URL of this service — Auth0 redirects back here after login
-    // When behind Kong: https://<KONG_IP>/moderate
+    // When behind Kong: https://<KONG_IP>
     // Local development: http://localhost:<PORT>
     baseURL: process.env.AUTH0_BASE_URL || `http://localhost:${port}`,
 
@@ -108,7 +137,12 @@ function buildAuthConfig(port) {
 function noAuthMiddleware(req, _res, next) {
   req.oidc = {
     isAuthenticated: () => true,
-    user: { name: 'Moderator (Auth Disabled)', email: 'moderator@local', picture: null }
+    user: {
+      name:         'Moderator (Auth Disabled)',
+      email:        'moderator@local',
+      picture:      null,
+      _authEnabled: false  // consumed by GET /me → sent to UI as authEnabled:false
+    }
   };
   next();
 }
@@ -137,4 +171,47 @@ function requiresAuthJson(req, res, next) {
   next();
 }
 
-module.exports = { auth, buildAuthConfig, requiresAuth, requiresAuthJson, AUTH_ENABLED };
+/**
+ * Optional moderator-role enforcement.
+ *
+ * Configure with:
+ *   MODERATOR_ROLE=moderator
+ *   AUTH0_ROLES_CLAIM=https://your-namespace.example.com/roles   (optional)
+ *
+ * If MODERATOR_ROLE is unset, role checks are skipped.
+ */
+function requiresModeratorRoleJson(req, res, next) {
+  if (!AUTH_ENABLED) return next();
+
+  const requiredRole = (process.env.MODERATOR_ROLE || '').trim();
+  if (!requiredRole) return next();
+
+  const user = req.oidc?.user || {};
+  const rolesClaimKey = (process.env.AUTH0_ROLES_CLAIM || '').trim();
+  const roleBag = rolesClaimKey ? user[rolesClaimKey] : (user.roles || []);
+  const roles = Array.isArray(roleBag)
+    ? roleBag
+    : (typeof roleBag === 'string' && roleBag ? [roleBag] : []);
+
+  if (!roles.includes(requiredRole)) {
+    return res.status(403).json({
+      error: 'Forbidden',
+      hint: `Moderator role "${requiredRole}" is required`
+    });
+  }
+
+  next();
+}
+
+module.exports = {
+  auth,
+  buildAuthConfig,
+  requiresAuth,
+  requiresAuthJson,
+  requiresModeratorRoleJson,
+  noAuthMiddleware,
+  AUTH_ENABLED,
+  AUTH_CREDENTIALS_PRESENT,
+  AUTH_EXPLICITLY_DISABLED,
+  getAuthMode
+};

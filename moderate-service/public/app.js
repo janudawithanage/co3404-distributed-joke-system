@@ -52,7 +52,22 @@ async function loadUserProfile() {
     } else {
       document.getElementById('user-avatar').style.display = 'none';
     }
-  } catch (_) { /* ignore — OIDC will redirect if needed */ }
+
+    // Show security warning banner when Auth0 is not configured.
+    // authEnabled:false is injected by the server when running in dev/unconfigured mode.
+    if (!user.authEnabled) {
+      const banner = document.getElementById('auth-warning');
+      const msgEl  = document.getElementById('auth-warning-text');
+      if (banner && msgEl) {
+        msgEl.textContent =
+          'Auth0 is not configured \u2014 anyone with this URL can approve or reject jokes ' +
+          'without logging in. Set AUTH0_SECRET, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET, ' +
+          'AUTH0_ISSUER_BASE_URL and AUTH0_BASE_URL in infra/.env.vm3, then redeploy ' +
+          'moderate-service to enforce login.';
+        banner.classList.add('visible');
+      }
+    }
+  } catch (_) { /* ignore \u2014 OIDC will redirect if needed */ }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

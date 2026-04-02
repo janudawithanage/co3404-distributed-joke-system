@@ -172,6 +172,9 @@ services:
       AUTH0_CLIENT_ID:        ${AUTH0_CLIENT_ID}
       AUTH0_CLIENT_SECRET:    ${AUTH0_CLIENT_SECRET}
       AUTH0_ISSUER_BASE_URL:  ${AUTH0_ISSUER_BASE_URL}
+      AUTH_ENABLED:           ${AUTH_ENABLED:-true}
+      MODERATOR_ROLE:         ${MODERATOR_ROLE:-}
+      AUTH0_ROLES_CLAIM:      ${AUTH0_ROLES_CLAIM:-}
       PORT:                   4300
     ports:
       - "3300:4300"

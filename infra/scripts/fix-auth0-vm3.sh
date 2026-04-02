@@ -17,9 +17,9 @@
 #   - VM3 public IP known (check Terraform output or Azure portal)
 #   - Auth0 "Regular Web Application" already created at https://manage.auth0.com
 #   - In Auth0 Application Settings, set:
-#       Allowed Callback URLs:  https://85.211.240.162/callback
-#       Allowed Logout URLs:    https://85.211.240.162
-#       Allowed Web Origins:    https://85.211.240.162
+#       Allowed Callback URLs:  https://<KONG_PUBLIC_IP>/callback
+#       Allowed Logout URLs:    https://<KONG_PUBLIC_IP>/moderate-ui
+#       Allowed Web Origins:    https://<KONG_PUBLIC_IP>
 # =============================================================================
 set -euo pipefail
 

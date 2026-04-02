@@ -2,16 +2,20 @@
 /**
  * test-flows.js
  * Comprehensive system-behaviour simulation.
- * Run with: docker exec jokes_joke_service node /app/test-flows.js
- * (or any container on the jokes_network)
+ * Run locally (host):      node test-flows.js
+ * Run from a container:    set *_BASE env vars to Docker DNS names, e.g.
+ *   JOKE_BASE=http://joke-service:4000 \
+ *   SUBMIT_BASE=http://submit-service:4200 \
+ *   MODERATE_BASE=http://moderate-service:4300 \
+ *   ETL_BASE=http://etl-service:4001 \
+ *   KONG_BASE=http://kong:80 node test-flows.js
  *
- * Services accessed via Docker-internal DNS:
- *   joke-service     http://joke-service:4000
- *   submit-service   http://submit-service:4200
- *   moderate-service http://moderate-service:4300
- *   etl-service      http://etl-service:4001
- *   kong             http://kong:80
- *   rabbitmq         http://rabbitmq:15672  (management API)
+ * Defaults target localhost ports from docker-compose:
+ *   joke-service     http://localhost:3000
+ *   submit-service   http://localhost:3200
+ *   moderate-service http://localhost:3300
+ *   etl-service      http://localhost:3001
+ *   kong             http://localhost:8000
  */
 
 const http  = require('http');
@@ -84,11 +88,11 @@ async function drainQueue(modUrl) {
 // MAIN TEST RUNNER
 // ═════════════════════════════════════════════════════════════════════════════
 (async () => {
-  const JOKE = 'http://joke-service:4000';
-  const SUBM = 'http://submit-service:4200';
-  const MOD  = 'http://moderate-service:4300';
-  const ETL  = 'http://etl-service:4001';
-  const KONG = 'http://kong:80';
+  const JOKE = process.env.JOKE_BASE     || 'http://localhost:3000';
+  const SUBM = process.env.SUBMIT_BASE   || 'http://localhost:3200';
+  const MOD  = process.env.MODERATE_BASE || 'http://localhost:3300';
+  const ETL  = process.env.ETL_BASE      || 'http://localhost:3001';
+  const KONG = process.env.KONG_BASE     || 'http://localhost:8000';
 
   // ───────────────────────────────────────────────────────────────────────────
   section('FLOW 1 — HEALTH CHECKS (direct)');
@@ -113,15 +117,17 @@ async function drainQueue(modUrl) {
     ['Kong → joke /joke/any',  '/joke/any'],
     ['Kong → submit /types',   '/types'],
     ['Kong → moderate /health','/health'],   // /health not routed — should 404
-    ['Kong → etl /etl-health (no route — internal only)', '/etl-health'],
+    ['Kong → etl /etl-health', '/etl-health'],
   ]) {
     try {
       const r = await request(KONG + path);
       const hasKongId = !!r.headers['kong-request-id'];
       const detail = `HTTP ${r.code}, Kong-Request-ID: ${hasKongId ? 'present' : 'MISSING'}`;
-      // /health and /etl-health are not Kong routes; 404 is expected (internal services)
-      if (path === '/health' || path === '/etl-health') {
+      // /health is not a Kong route; /etl-health is explicitly routed.
+      if (path === '/health') {
         r.code === 404 ? pass(label+' (correctly 404 — unrouted path)', detail) : warn(label, detail);
+      } else if (path === '/etl-health') {
+        r.code === 200 ? pass(label, detail) : fail(label, detail);
       } else if (r.code < 400) {
         pass(label, detail);
       } else {
@@ -245,7 +251,7 @@ async function drainQueue(modUrl) {
   section('FLOW 5 — MODERATE → APPROVE (GET /moderate + POST /moderated)');
   // ───────────────────────────────────────────────────────────────────────────
   // Submit a fresh joke to guarantee something is in the queue
-  await post(SUBM+'/submit', { setup:'Test approve joke', punchline:'Approved!', type:'testing' });
+  await post(SUBM+'/submit', { setup:'Test approve joke', punchline:'Approved!', type:'testing' }).catch(() => ({ code: 0 }));
   await sleep(300);
 
   // GET /moderate (no-auth mode — AUTH0 vars are placeholders)
@@ -275,7 +281,7 @@ async function drainQueue(modUrl) {
   } catch(e) { warn('/moderate secondary check', e.message); }
 
   // POST /reject flow
-  await post(SUBM+'/submit', { setup:'Test reject joke', punchline:'Rejected!', type:'testing' });
+  await post(SUBM+'/submit', { setup:'Test reject joke', punchline:'Rejected!', type:'testing' }).catch(() => ({ code: 0 }));
   await sleep(300);
   try {
     const fetchR = await request(MOD+'/moderate');
@@ -310,7 +316,7 @@ async function drainQueue(modUrl) {
   const uniqueSetup = `ETL test joke ${Date.now()}`;
   const uniqueType  = `etl${Date.now()}`;
 
-  await post(SUBM+'/submit', { setup: uniqueSetup, punchline: 'ETL punchline', type: uniqueType });
+  await post(SUBM+'/submit', { setup: uniqueSetup, punchline: 'ETL punchline', type: uniqueType }).catch(() => ({ code: 0 }));
   await sleep(500); // let RabbitMQ route the message
 
   let approvedType = null;
@@ -344,7 +350,7 @@ async function drainQueue(modUrl) {
   const newType = `ecst${Date.now()}`;
   let ecstApprovedType = null;
 
-  await post(SUBM+'/submit', { setup: `ECST test ${newType}`, punchline: 'sync!', type: newType });
+  await post(SUBM+'/submit', { setup: `ECST test ${newType}`, punchline: 'sync!', type: newType }).catch(() => ({ code: 0 }));
   await sleep(500);
 
   try {

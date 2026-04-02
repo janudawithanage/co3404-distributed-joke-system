@@ -105,11 +105,21 @@ const swaggerOptions = {
       version:     '2.0.0',
       description: 'CO3404 Distributed Systems Option 4 – Submit jokes to moderation queue'
     },
-    servers: [
-      { url: 'http://localhost:3200',  description: 'Local – direct' },
-      { url: 'http://localhost:8000',  description: 'Local – Kong' },
-      { url: process.env.PUBLIC_AZURE_BASE || process.env.PUBLIC_GATEWAY_BASE || 'https://KONG_PUBLIC_IP', description: 'Azure – Kong' }
-    ]
+    // When PUBLIC_GATEWAY_BASE is set (production/Azure) that server appears FIRST
+    // so Swagger UI selects it as the default for "Try it out" requests.
+    // Locally (no env var set) the local direct server appears first.
+    servers: (() => {
+      const azureBase = process.env.PUBLIC_AZURE_BASE || process.env.PUBLIC_GATEWAY_BASE;
+      const list = [
+        { url: 'http://localhost:3200', description: 'Local – direct' },
+        { url: 'http://localhost:8000', description: 'Local – Kong' },
+      ];
+      if (azureBase && azureBase !== 'http://localhost:3200' && azureBase !== 'http://localhost:8000') {
+        // Put Azure server at the top so Swagger UI picks it as default
+        list.unshift({ url: azureBase, description: 'Hosted – Azure Kong' });
+      }
+      return list;
+    })()
   },
   apis: ['./server.js']
 };

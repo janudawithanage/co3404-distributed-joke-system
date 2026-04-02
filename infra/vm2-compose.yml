@@ -56,17 +56,25 @@ services:
 
   # Submit Service -- public REST API + frontend + Swagger
   #
+  # Image is built and pushed to Docker Hub by the CI/CD pipeline
+  # (.github/workflows/deploy-submit.yml) on every push to main.
+  # Set SUBMIT_IMAGE in infra/.env.vm2 (see .env.vm2.example).
   # Option 4: /types is served from ECST cache (no HTTP proxy to joke-service).
   # The cache is populated automatically when ETL publishes type_update events
   # to the sub_type_update queue that submit-service subscribes to.
   submit-service:
-    build: ./submit-service
+    image: ${SUBMIT_IMAGE:-your-dockerhub-username/submit-service:latest}
     container_name: jokes_submit_service
     environment:
-      RABBITMQ_HOST:     rabbitmq      # internal Docker DNS (same vm2_network)
-      RABBITMQ_USER:     ${RABBITMQ_USER}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
-      PORT:              4200
+      RABBITMQ_HOST:       rabbitmq      # internal Docker DNS (same vm2_network)
+      RABBITMQ_USER:       ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD:   ${RABBITMQ_PASSWORD}
+      # PUBLIC_GATEWAY_BASE: Kong's public URL (e.g. https://85.211.240.162)
+      # Required so the Swagger UI defaults to the Azure server instead of localhost
+      # and so frontend API calls route through Kong.
+      # Set in infra/.env.vm2 (see .env.vm2.example).
+      PUBLIC_GATEWAY_BASE: ${PUBLIC_GATEWAY_BASE:-}
+      PORT:                4200
     ports:
       - "3200:4200"
     depends_on:

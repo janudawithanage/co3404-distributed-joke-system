@@ -52,9 +52,14 @@ services:
   # Joke Service — public REST API + static frontend
   # Port 3000 mapped to host → reachable on VM1 public IP.
   # NSG rule Allow-JokeAPI allows TCP 3000 from Any.
+  #
+  # Image is built and pushed to Docker Hub by the CI/CD pipeline
+  # (.github/workflows/deploy-joke.yml) on every push to main.
+  # Set JOKE_IMAGE in infra/.env.vm1 (see .env.vm1.example).
+  # To roll back: set JOKE_IMAGE to a previous sha tag and re-run deploy.sh.
   # ─────────────────────────────────────────────────────────────────
   joke-service:
-    build: ./joke-service
+    image: ${JOKE_IMAGE:-your-dockerhub-username/joke-service:latest}
     container_name: jokes_joke_service
     environment:
       DB_TYPE:     ${DB_TYPE:-mysql}   # 'mysql' or 'mongo'

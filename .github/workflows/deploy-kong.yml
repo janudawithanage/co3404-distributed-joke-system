@@ -1,0 +1,123 @@
+# =============================================================================
+# .github/workflows/deploy-kong.yml
+#
+# CD Pipeline: Push kong.yml (and compose) to VM4 and reload Kong.
+#
+# Kong is DB-less declarative: a config change = scp new file + docker compose
+# restart.  This workflow automates that so infra/kong/kong.yml changes are
+# applied to Azure within minutes of merging to main.
+#
+# Triggers:
+#   - Push to main that changes infra/kong/kong.yml or docker-compose.yml
+#   - Manual trigger via workflow_dispatch (Actions → "Run workflow")
+#
+# Required GitHub Secrets (Settings → Secrets → Actions):
+#   KONG_VM_HOST            - Public IP or hostname of the Kong VM (VM4)
+#   KONG_VM_SSH_PRIVATE_KEY - PEM-encoded SSH private key for azureuser@VM4
+#                             (same key as co3404_key used in deploy.sh)
+# =============================================================================
+
+name: Deploy Kong Config
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/kong/kong.yml"
+      - "infra/kong/docker-compose.yml"
+  workflow_dispatch: # allow manual trigger from the GitHub Actions UI
+
+jobs:
+  deploy-kong:
+    name: Push kong.yml to VM4 and reload Kong
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Copy config files to Kong VM ────────────────────────────────────────
+      # strip_components:2 strips "infra/kong/" so the file lands at:
+      #   /home/azureuser/kong/kong.yml
+      #   /home/azureuser/kong/docker-compose.yml
+      - name: Copy kong.yml to VM4
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host:             ${{ secrets.KONG_VM_HOST }}
+          username:         azureuser
+          key:              ${{ secrets.KONG_VM_SSH_PRIVATE_KEY }}
+          source:           "infra/kong/kong.yml"
+          target:           "/home/azureuser/kong/"
+          strip_components: 2
+
+      - name: Copy docker-compose.yml to VM4
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host:             ${{ secrets.KONG_VM_HOST }}
+          username:         azureuser
+          key:              ${{ secrets.KONG_VM_SSH_PRIVATE_KEY }}
+          source:           "infra/kong/docker-compose.yml"
+          target:           "/home/azureuser/kong/"
+          strip_components: 2
+
+      # ── Reload Kong ──────────────────────────────────────────────────────────
+      # Kong is DB-less: docker compose down → up picks up the new declarative
+      # config file.  We wait up to 60 s (12 × 5 s) for the admin API to become
+      # healthy before proceeding to the smoke test.
+      - name: Reload Kong on VM4
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.KONG_VM_HOST }}
+          username: azureuser
+          key:      ${{ secrets.KONG_VM_SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /home/azureuser/kong
+
+            echo "==> Bringing Kong down..."
+            sudo docker compose down
+
+            echo "==> Starting Kong with new config..."
+            sudo docker compose up -d
+
+            echo "==> Waiting for Kong admin API to become healthy..."
+            HEALTHY=0
+            for i in $(seq 1 12); do
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5                        http://localhost:8001/status 2>/dev/null || echo "000")
+              echo "  Attempt $i/12: admin API HTTP $STATUS"
+              if [ "$STATUS" = "200" ]; then
+                HEALTHY=1
+                break
+              fi
+              sleep 5
+            done
+
+            if [ "$HEALTHY" -ne 1 ]; then
+              echo "ERROR: Kong admin API did not become healthy after 60 s"
+              sudo docker compose logs kong --tail=50
+              exit 1
+            fi
+            echo "==> Kong admin API is healthy."
+
+      # ── Smoke-test the proxy ─────────────────────────────────────────────────
+      # Verify that the Kong proxy can reach joke-service via /health.
+      # HTTP 200 = kong.yml routes loaded correctly and joke-service is reachable.
+      - name: Smoke-test /health via Kong proxy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.KONG_VM_HOST }}
+          username: azureuser
+          key:      ${{ secrets.KONG_VM_SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            echo "==> Smoke-testing /health through Kong proxy (port 80)..."
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10                      http://localhost/health 2>/dev/null || echo "000")
+            echo "  /health returned HTTP $STATUS"
+            if [ "$STATUS" != "200" ]; then
+              echo "ERROR: /health smoke test failed (expected 200, got $STATUS)"
+              echo "Kong error log:"
+              sudo docker compose -f /home/azureuser/kong/docker-compose.yml logs kong --tail=80
+              exit 1
+            fi
+            echo "==> Kong deployment successful. All routes are live."

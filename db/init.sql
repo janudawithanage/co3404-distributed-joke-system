@@ -31,9 +31,11 @@ CREATE TABLE IF NOT EXISTS jokes (
   FOREIGN KEY (type_id) REFERENCES types(id) ON DELETE RESTRICT,
   -- Prevent exact-duplicate joke submissions reaching the database.
   -- TEXT columns need a prefix length for index/unique constraints in MySQL.
+  -- utf8mb4 uses up to 4 bytes/char; MySQL InnoDB's combined index key cap is
+  -- 3072 bytes. 255+255 = 510 chars × 4 = 2040 bytes, safely within the limit.
   -- prefetch(1) in moderate + manual ACK already prevents most duplication;
   -- this is a defence-in-depth constraint at the DB layer.
-  UNIQUE KEY uq_joke (setup(500), punchline(500))
+  UNIQUE KEY uq_joke (setup(255), punchline(255))
 );
 
 -- ── Seed Data ─────────────────────────────────────────────

@@ -1,6 +1,6 @@
 {
   "name": "etl-service",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "CO3404 Distributed Systems – ETL microservice (RabbitMQ consumer → MySQL or MongoDB)",
   "main": "server.js",
   "scripts": {

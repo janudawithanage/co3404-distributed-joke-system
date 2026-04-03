@@ -1,6 +1,5 @@
-# Final Submission Status
+# Final Status
 
-> **Module:** CO3404 Distributed Systems — Ulster University
 > **Date:** 3 April 2026
 
 ---

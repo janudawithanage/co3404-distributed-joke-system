@@ -73,7 +73,7 @@ if [[ ! -f "${PROJECT_ROOT}/infra/.env.vm2" ]]; then
 fi
 
 echo "========================================"
-echo " CO3404 Deploy Script"
+echo " Distributed Joke System — Deploy Script"
 echo " Project root: $PROJECT_ROOT"
 echo " VM1: $VM1_IP  (joke-vm: joke-service + etl-service + MySQL)"
 echo " VM2: $VM2_IP  (submit-vm: submit-service + RabbitMQ)"

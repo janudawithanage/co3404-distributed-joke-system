@@ -69,7 +69,7 @@ services:
       RABBITMQ_HOST:       rabbitmq      # internal Docker DNS (same vm2_network)
       RABBITMQ_USER:       ${RABBITMQ_USER}
       RABBITMQ_PASSWORD:   ${RABBITMQ_PASSWORD}
-      # PUBLIC_GATEWAY_BASE: Kong's public URL (e.g. https://85.211.240.162)
+      # PUBLIC_GATEWAY_BASE: Kong's public URL (e.g. https://<KONG_PUBLIC_IP>)
       # Required so the Swagger UI defaults to the Azure server instead of localhost
       # and so frontend API calls route through Kong.
       # Set in infra/.env.vm2 (see .env.vm2.example).

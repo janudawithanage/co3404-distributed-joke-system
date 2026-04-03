@@ -1,7 +1,7 @@
 {
   "name": "moderate-service",
   "version": "2.0.0",
-  "description": "CO3404 Distributed Systems – Human joke moderation microservice (Option 4)",
+  "description": "Joke moderation microservice — Express, RabbitMQ, Auth0 OIDC",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

@@ -1,7 +1,7 @@
 {
   "name": "submit-service",
   "version": "2.0.0",
-  "description": "CO3404 Distributed Systems – Joke submission microservice (Option 4)",
+  "description": "Joke submission microservice — Express, RabbitMQ, Swagger UI",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

@@ -1,7 +1,7 @@
 {
   "name": "joke-service",
   "version": "2.0.0",
-  "description": "CO3404 Distributed Systems – Joke retrieval microservice (MySQL or MongoDB)",
+  "description": "Joke retrieval microservice — Express, MySQL/MongoDB, Kong-routed frontend",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

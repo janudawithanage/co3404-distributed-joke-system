@@ -1,4 +1,4 @@
-# CO3404 Distributed Joke System
+# Distributed Joke System
 
 A distributed microservices platform built as a personal project to explore distributed systems design.
 

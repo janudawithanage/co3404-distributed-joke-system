@@ -46,7 +46,7 @@ All 8 bugs identified in the visual audit report have been resolved:
 | MySQL | ✅ Schema correct (`utf8mb4_0900_ai_ci`); 5 types, 11 seed jokes |
 | RabbitMQ | ✅ All queues and fanout exchange configured; 0 stale messages |
 | Auth mode (local) | ✅ Dev/demo mode — full moderation pipeline works without Auth0 login |
-| Azure VMs (VM1–VM4) | ⚠️ May be deallocated — student subscription, no uptime guarantee |
+| Azure VMs (VM1–VM4) | ⚠️ May be deallocated (pay-as-you-go subscription) |
 | GitHub Actions CI/CD | ✅ Workflows for joke, submit, moderate, etl, kong — all passing |
 
 ---

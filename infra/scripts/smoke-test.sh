@@ -2,7 +2,7 @@
 # =============================================================================
 # infra/scripts/smoke-test.sh
 #
-# End-to-end smoke test for the CO3404 Distributed Joke System.
+# End-to-end smoke test for the Distributed Joke System.
 # Runs against the live Azure deployment via the Kong gateway.
 #
 # Usage:
@@ -100,7 +100,7 @@ check_contains() {
 
 # ─────────────────────────────────────────────────────────────────────────────
 echo ""
-echo -e "${BOLD}CO3404 Smoke Test${RESET}"
+echo -e "${BOLD}Distributed Joke System — Smoke Test${RESET}"
 echo "  Target: $BASE"
 echo "  Date:   $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo ""

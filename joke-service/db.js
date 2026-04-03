@@ -150,5 +150,5 @@ if (DB_TYPE === 'mongo') {
     return rows;
   }
 
-  module.exports = { pool, connectWithRetry, getJokes, getTypes };
+  module.exports = { connectWithRetry, getJokes, getTypes };
 }

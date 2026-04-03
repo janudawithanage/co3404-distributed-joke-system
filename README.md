@@ -183,7 +183,6 @@ After running `docker compose up -d`:
 | http://localhost:3001/health | ETL Service | Health check |
 | http://localhost:15672 | RabbitMQ | Management UI (guest / guest) |
 | http://localhost:8000/mq-admin/ | RabbitMQ via Kong | Management UI (localhost access only) |
-| http://localhost:8000/mq-admin/ | RabbitMQ | Management UI via Kong |
 | localhost:3306 | MySQL | jokeuser / jokepassword |
 
 > **Azure direct access** (bypassing Kong):

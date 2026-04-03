@@ -206,6 +206,22 @@ document.addEventListener('DOMContentLoaded', () => {
   loadTypes();
   loadHealth();
 
+  // Rewrite nav/footer links so they route through the Kong gateway
+  // instead of the current origin (which may be the joke-service directly).
+  const gw = bases.gateway;
+  if (gw) {
+    const linkMap = {
+      'nav-submit-ui':    gw + '/submit/',
+      'nav-moderate-ui':  gw + '/moderate-ui/',
+      'nav-api-docs':     gw + '/docs',
+      'footer-api-docs':  gw + '/docs'
+    };
+    Object.entries(linkMap).forEach(([id, href]) => {
+      const el = document.getElementById(id);
+      if (el) el.href = href;
+    });
+  }
+
   document.getElementById('getJokeBtn').addEventListener('click', getJokes);
   document.getElementById('refresh-types').addEventListener('click', loadTypes);
   document.getElementById('submit-btn').addEventListener('click', submitFromHome);

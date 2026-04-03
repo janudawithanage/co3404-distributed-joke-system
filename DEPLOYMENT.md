@@ -4,6 +4,8 @@ This guide takes you from a fresh clone to a fully running Azure deployment
 and explains how to keep it up to date.  Read it top to bottom the first time;
 for subsequent deploys jump straight to [Redeploy steps](#redeploy-steps).
 
+> **⚠️ Azure status:** VMs may be deallocated (student subscription). All services work fully in local Docker — see [LOCAL_RUN.md](LOCAL_RUN.md).
+
 ---
 
 ## Architecture overview
@@ -213,6 +215,7 @@ CI/CD handles everything automatically:
 | `joke-service/**` | `deploy-joke.yml` | Build image → push to Docker Hub → SSH to VM1 → pull + restart → health check |
 | `submit-service/**` | `deploy-submit.yml` | Same for VM2 |
 | `moderate-service/**` | `deploy-moderate.yml` | Same for VM3 |
+| `etl-service/**` | `deploy-etl.yml` | Build image → push to Docker Hub → SSH to VM1 → pull + restart etl-service only → health check |
 | `infra/kong/kong.yml` | `deploy-kong.yml` | SCP kong.yml to VM4 → restart Kong → smoke test `/health` |
 
 Each workflow also **injects the current `KONG_PUBLIC_URL` secret into `.env`**
@@ -271,9 +274,9 @@ KONG_IP=<ip> ./infra/scripts/redeploy-kong.sh
 - Setting up Auth0 credentials in `.env.vm3` (if needed)
 
 ### Manual (ongoing)
-- ETL service changes → must run `./infra/deploy.sh` (no CI/CD for ETL)
 - TLS certificate rotation → update `infra/kong/certs/` and push to main (Kong CI/CD handles the rest)
 - Scaling / adding VMs → update Terraform and re-run `deploy.sh`
+- First-time ETL deploy → run `./infra/deploy.sh` (CI/CD takes over for subsequent changes)
 
 ---
 

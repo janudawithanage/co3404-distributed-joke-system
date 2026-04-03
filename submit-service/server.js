@@ -103,7 +103,7 @@ const swaggerOptions = {
     info: {
       title:       'Submit Service API',
       version:     '2.0.0',
-      description: 'CO3404 Distributed Systems Option 4 – Submit jokes to moderation queue'
+      description: 'Distributed Joke System – Submit jokes to the moderation queue'
     },
     // When PUBLIC_GATEWAY_BASE is set (production/Azure) that server appears FIRST
     // so Swagger UI selects it as the default for "Try it out" requests.

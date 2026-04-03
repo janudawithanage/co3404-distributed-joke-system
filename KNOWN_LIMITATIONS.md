@@ -2,7 +2,7 @@
 
 ## Azure Deployment Uptime
 
-The Azure VMs (VM1–VM4) are hosted on a student subscription and may be deallocated at any point. There is no guarantee of uptime between submission and marking.
+The Azure VMs (VM1–VM4) run on a pay-as-you-go subscription and may be deallocated to save costs.
 
 **If the Azure environment is unavailable:**
 - All features work fully in local Docker (`docker compose up -d`)
@@ -27,7 +27,7 @@ terraform -chdir=infra/terraform output -raw kong_public_ip
 
 The Kong TLS certificate in `infra/kong/certs/` is self-signed. Browsers show a security warning; use `curl -k` or accept the browser warning for testing.
 
-Replacing with a Let's Encrypt certificate is straightforward but out of scope for this assignment.
+Replacing with a Let's Encrypt certificate is straightforward but not implemented in this project.
 
 ---
 
@@ -44,13 +44,13 @@ Replacing with a Let's Encrypt certificate is straightforward but out of scope f
 
 RabbitMQ runs as a single container with no message persistence beyond standard queue durability. If VM2 is forcibly stopped while messages are in-flight, unacked messages in the `submit` queue may be lost.
 
-For this assignment scope, a single-node broker is sufficient.
+For this project's scope, a single-node broker is sufficient.
 
 ---
 
 ## Rate Limiting Scope
 
-Only `GET /joke/:type` is rate-limited (5 req/min per IP). The `/submit` endpoint has no rate limiting, which would be a concern in a real production deployment. This was considered acceptable for the module scope.
+Only `GET /joke/:type` is rate-limited (5 req/min per IP). The `/submit` endpoint has no rate limiting, which would be a concern in a real production deployment. This was considered acceptable for this project's scope.
 
 ---
 

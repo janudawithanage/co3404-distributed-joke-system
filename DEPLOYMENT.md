@@ -1,10 +1,10 @@
-# CO3404 Distributed Joke System — Deployment Guide
+# Distributed Joke System — Deployment Guide
 
 This guide takes you from a fresh clone to a fully running Azure deployment
 and explains how to keep it up to date.  Read it top to bottom the first time;
 for subsequent deploys jump straight to [Redeploy steps](#redeploy-steps).
 
-> **⚠️ Azure status:** VMs may be deallocated (student subscription). All services work fully in local Docker — see [LOCAL_RUN.md](LOCAL_RUN.md).
+> **⚠️ Azure status:** VMs may be deallocated to save costs. All services work fully in local Docker — see [LOCAL_RUN.md](LOCAL_RUN.md).
 
 ---
 
@@ -84,7 +84,7 @@ cp infra/.env.vm2.example infra/.env.vm2
 cp infra/.env.vm3.example infra/.env.vm3
 ```
 
-**Minimum values to fill in** (others have working defaults for the lab):
+**Minimum values to fill in** (others have safe defaults for local/demo use):
 
 | File | Variable | Value |
 |------|----------|-------|
@@ -185,7 +185,7 @@ The script tests:
 A clean deployment produces output like:
 
 ```
-CO3404 Smoke Test
+Smoke Test
   Target: https://1.2.3.4
 
 A. Static / health routes

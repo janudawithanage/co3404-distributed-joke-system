@@ -27,11 +27,9 @@
 name: Deploy Joke Service
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "joke-service/**"
-      - ".github/workflows/deploy-joke.yml"
+  # Deployment requires secrets (DOCKER_HUB_TOKEN, VM1_HOST, VM1_SSH_PRIVATE_KEY, etc.)
+  # Trigger manually: GitHub → Actions → Deploy joke-service → Run workflow
+  workflow_dispatch:
 
 env:
   IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/joke-service

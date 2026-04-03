@@ -17,11 +17,9 @@
 name: Deploy Moderate Service
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "moderate-service/**"
-      - ".github/workflows/deploy-moderate.yml"
+  # Deployment requires secrets (DOCKER_HUB_TOKEN, VM3_HOST, VM3_SSH_PRIVATE_KEY, etc.)
+  # Trigger manually: GitHub → Actions → Deploy moderate-service → Run workflow
+  workflow_dispatch:
 
 env:
   IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/moderate-service

@@ -111,8 +111,8 @@ const swaggerOptions = {
     servers: (() => {
       const azureBase = process.env.PUBLIC_AZURE_BASE || process.env.PUBLIC_GATEWAY_BASE;
       const list = [
-        { url: 'http://localhost:3200', description: 'Local – direct' },
-        { url: 'http://localhost:8000', description: 'Local – Kong' },
+        { url: 'http://localhost:8000', description: 'Local – Kong (recommended)' },
+        { url: 'http://localhost:3200', description: 'Local – direct (bypass Kong)' },
       ];
       if (azureBase && azureBase !== 'http://localhost:3200' && azureBase !== 'http://localhost:8000') {
         // Put Azure server at the top so Swagger UI picks it as default

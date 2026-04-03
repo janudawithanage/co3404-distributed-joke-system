@@ -8,7 +8,7 @@ The platform supports:
 - human moderation,
 - asynchronous persistence through RabbitMQ.
 
-> Last updated: **28 March 2026**
+> Last updated: **3 April 2026**
 
 ---
 
@@ -182,6 +182,7 @@ After running `docker compose up -d`:
 | http://localhost:3300/health | Moderate Service | Health check |
 | http://localhost:3001/health | ETL Service | Health check |
 | http://localhost:15672 | RabbitMQ | Management UI (guest / guest) |
+| http://localhost:8000/mq-admin/ | RabbitMQ via Kong | Management UI (localhost access only) |
 | http://localhost:8000/mq-admin/ | RabbitMQ | Management UI via Kong |
 | localhost:3306 | MySQL | jokeuser / jokepassword |
 
@@ -474,6 +475,26 @@ Copy `.env.example` to `.env`. Defaults work for local development except Auth0 
 | `type_update` | Fanout exchange | etl-service | `sub_type_update`, `mod_type_update` queues | ECST broadcast carrying the full type list |
 | `sub_type_update` | Queue (bound to `type_update`) | etl-service | submit-service | Refresh submit-service cache after new type creation |
 | `mod_type_update` | Queue (bound to `type_update`) | etl-service | moderate-service | Refresh moderate-service cache after new type creation |
+
+---
+
+## Testing
+
+A comprehensive end-to-end test suite is included.
+
+```bash
+# Run all 59 system tests (Docker must be running)
+node test-flows.js
+```
+
+Tests cover: health checks, joke fetch, rate limiting, submit → queue, moderate → approve/reject, ETL → DB write, ECST cache sync, auth modes, and UI HTML serving.
+
+> **Cleanup:** `test-flows.js` automatically removes test-generated types (`ecst*`, `etl*`, `testing`) from the database after each run. If you need to clean manually:
+>
+> ```bash
+> docker exec jokes_mysql mysql -ujokeuser -pjokepassword jokesdb \
+>   -e "DELETE j FROM jokes j JOIN types t ON j.type_id=t.id WHERE t.name REGEXP '^(ecst|etl)[0-9]+$' OR t.name='testing'; DELETE FROM types WHERE name REGEXP '^(ecst|etl)[0-9]+$' OR name='testing';"
+> ```
 
 ---
 

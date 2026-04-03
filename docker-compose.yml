@@ -28,6 +28,9 @@ services:
   mysql:
     image: mysql:8.0
     container_name: jokes_mysql
+    # Explicitly enforce utf8mb4 server-side so every new connection defaults to it.
+    # Prevents mojibake in non-ASCII characters (em dashes, curly quotes, etc.).
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
       MYSQL_DATABASE:      ${DB_NAME}

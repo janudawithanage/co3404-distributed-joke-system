@@ -542,6 +542,40 @@ async function drainQueue(modUrl) {
   else                       verdict = W('🔴 NOT COMPLETE       (' + pct + '% pass, '+failed+' failures)');
 
   console.log('\n  Verdict: ' + verdict + '\n');
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // POST-TEST CLEANUP (BUG-L4)
+  // Remove test-generated type rows (ecst*, etl*, testing) from the database.
+  // These are created by FLOW 6 (ETL test) and FLOW 7 (ECST test) above.
+  // Uses docker exec to run mysql inside the container — no host mysql2 needed.
+  // ───────────────────────────────────────────────────────────────────────────
+  const { execSync } = require('child_process');
+  const dbUser = process.env.DB_USER     || 'jokeuser';
+  const dbPass = process.env.DB_PASSWORD || 'jokepassword';
+  const dbName = process.env.DB_NAME     || 'jokesdb';
+  const cleanSQL = [
+    "DELETE j FROM jokes j JOIN types t ON j.type_id=t.id WHERE t.name REGEXP '^(ecst|etl)[0-9]+$' OR t.name='testing';",
+    "DELETE FROM types WHERE name REGEXP '^(ecst|etl)[0-9]+$' OR name='testing';"
+  ].join(' ');
+
+  try {
+    const result = execSync(
+      `docker exec jokes_mysql mysql -u${dbUser} -p${dbPass} ${dbName} -e "${cleanSQL}" 2>&1`,
+      { encoding: 'utf8', timeout: 10000 }
+    );
+    console.log(Y('\n  🧹 Post-test cleanup: removed test artifact types/jokes from DB'));
+    if (result && result.includes('rows affected')) console.log(Y('     ' + result.trim()));
+  } catch (cleanErr) {
+    const msg = cleanErr.stderr || cleanErr.stdout || cleanErr.message || '';
+    if (msg.includes('Container') || msg.includes('docker')) {
+      console.log(Y('\n  ⚠ Post-test cleanup skipped (docker not available from this env)'));
+      console.log(Y('    Run manually inside the jokes_mysql container:'));
+      console.log(Y(`    docker exec jokes_mysql mysql -u${dbUser} -p${dbPass} ${dbName} -e "${cleanSQL}"`));
+    } else {
+      // Cleanup errors are non-fatal — tests already passed
+      console.log(Y('\n  ⚠ Post-test cleanup: ' + (msg.split('\n')[0] || 'unknown error')));
+    }
+  }
 })().catch(err => {
   console.error('Fatal test runner error:', err);
   process.exit(1);

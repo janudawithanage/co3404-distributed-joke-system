@@ -266,8 +266,8 @@ services:
                 - 127.0.0.0/8      # loopback
                 - 172.16.0.0/12    # Docker bridge subnets (172.17–172.31.x.x)
                 - 10.0.0.0/8       # any custom Docker/Compose internal range
-              deny:
-                - 0.0.0.0/0        # deny everything else explicitly
+                - 192.168.65.0/24  # Docker Desktop Mac (host bridge via com.docker.internal)
+              # No deny list needed: an explicit allow list rejects all unlisted IPs.
 
       - name:          mq-api-route
         paths:         [/api]
@@ -281,8 +281,8 @@ services:
                 - 127.0.0.0/8
                 - 172.16.0.0/12
                 - 10.0.0.0/8
-              deny:
-                - 0.0.0.0/0
+                - 192.168.65.0/24  # Docker Desktop Mac
+              # No deny list needed: allow list alone blocks all other IPs.
 
   # ---------------------------------------------------------------------------
   # ETL Service (Docker service: etl-service:4001)

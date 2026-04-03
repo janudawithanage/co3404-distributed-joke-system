@@ -22,28 +22,28 @@
 'use strict';
 
 const express = require('express');
-const path    = require('path');
-const helmet  = require('helmet');
+const path = require('path');
+const helmet = require('helmet');
 const { connectWithRetry, getJokes, getTypes } = require('./db');
 
-const app  = express();
+const app = express();
 const PORT = process.env.PORT || 4000;
 
 // Shared config for the unified luxury homepage. Values can be overridden
 // via environment variables; otherwise sensible defaults are derived.
 function buildPublicConfig() {
-  const gatewayBase  = process.env.PUBLIC_GATEWAY_BASE || '';
-  const localBase    = process.env.PUBLIC_LOCAL_BASE   || '';
-  const azureBase    = process.env.PUBLIC_AZURE_BASE   || '';
-  const jokeBase     = process.env.PUBLIC_JOKE_BASE    || '';
-  const submitBase   = process.env.PUBLIC_SUBMIT_BASE  || '';
+  const gatewayBase = process.env.PUBLIC_GATEWAY_BASE || '';
+  const localBase = process.env.PUBLIC_LOCAL_BASE || '';
+  const azureBase = process.env.PUBLIC_AZURE_BASE || '';
+  const jokeBase = process.env.PUBLIC_JOKE_BASE || '';
+  const submitBase = process.env.PUBLIC_SUBMIT_BASE || '';
   const moderateBase = process.env.PUBLIC_MODERATE_BASE || '';
 
   return {
     gatewayBase,
     localBase,
     azureBase,
-    jokeServiceBase:   jokeBase,
+    jokeServiceBase: jokeBase,
     submitServiceBase: submitBase,
     moderateServiceBase: moderateBase
   };
@@ -84,12 +84,55 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/joke-ui', express.static(path.join(__dirname, 'public')));
 
-// Expose runtime configuration to the frontend without baking secrets
-app.get('/config.js', (_req, res) => {
+// ─────────────────────────────────────────────────────────────────────────────
+// Cross-service Redirects
+//
+// When a user visits /submit/, /moderate-ui/, or /docs directly on the
+// joke-service (port 3000), they get a 404 because those routes live on
+// other services.  These redirects forward them to the correct endpoint:
+//   /submit/      → submit-service  (via Kong or direct)
+//   /moderate-ui/ → moderate-service (via Kong or direct)
+//   /docs         → submit-service Swagger UI (via Kong or direct)
+//
+// Kong gateway (8000) is preferred when PUBLIC_GATEWAY_BASE is set.
+// Fall back to direct service ports for pure-local use without Kong.
+// ─────────────────────────────────────────────────────────────────────────────
+app.use('/submit', (req, res, next) => {
+  // Only redirect GET browser requests (not API POST /submit calls if any)
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+  const gw = process.env.PUBLIC_GATEWAY_BASE || 'http://localhost:8000';
+  return res.redirect(302, `${gw}/submit${req.url === '/' ? '/' : req.url}`);
+});
+
+app.use('/moderate-ui', (req, res) => {
+  const gw = process.env.PUBLIC_GATEWAY_BASE || 'http://localhost:8000';
+  return res.redirect(302, `${gw}/moderate-ui${req.url === '/' ? '/' : req.url}`);
+});
+
+app.use('/docs', (req, res) => {
+  const gw = process.env.PUBLIC_GATEWAY_BASE || 'http://localhost:8000';
+  return res.redirect(302, `${gw}/docs${req.url === '/' ? '' : req.url}`);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Runtime Config — window.APP_CONFIG
+//
+// Served at both /config.js (root) AND /joke-ui/config.js so that the
+// frontend works whether accessed via / or /joke-ui/.
+//
+// The HTML has <base href="/joke-ui/">, which means a relative <script src="config.js">
+// resolves to /joke-ui/config.js — without this alias it returns 404, and
+// window.APP_CONFIG is never set.  Without APP_CONFIG the type dropdown stays
+// empty (bases.gateway falls back to window.location.origin = the joke-service
+// itself, and submitting POSTs to the wrong service).
+// ─────────────────────────────────────────────────────────────────────────────
+function serveConfig(_req, res) {
   res.type('application/javascript').send(
     `window.APP_CONFIG = ${JSON.stringify(buildPublicConfig())};`
   );
-});
+}
+app.get('/config.js', serveConfig);
+app.get('/joke-ui/config.js', serveConfig);
 
 // ─────────────────────────────────────────────────────────────
 // GET /types
@@ -117,7 +160,7 @@ app.get('/types', async (_req, res) => {
 // ─────────────────────────────────────────────────────────────
 app.get('/joke/:type', async (req, res) => {
   const { type } = req.params;
-  const count    = Math.max(1, parseInt(req.query.count) || 1);
+  const count = Math.max(1, parseInt(req.query.count) || 1);
 
   try {
     const rows = await getJokes(type, count);
@@ -142,9 +185,9 @@ app.get('/joke/:type', async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
   res.json({
-    status:    'ok',
-    service:   'joke-service',
-    dbType:    process.env.DB_TYPE || 'mysql',
+    status: 'ok',
+    service: 'joke-service',
+    dbType: process.env.DB_TYPE || 'mysql',
     timestamp: new Date().toISOString()
   });
 });
@@ -185,6 +228,6 @@ function shutdown(signal) {
   }
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT',  () => shutdown('SIGINT'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 start();

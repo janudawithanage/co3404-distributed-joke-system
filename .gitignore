@@ -4,6 +4,9 @@ node_modules/
 *.env
 *.log
 
+# macOS metadata — never commit
+**/.DS_Store
+
 # ── LaTeX build artefacts (keep .tex and .pdf, exclude temp files) ───────────
 report/*.aux
 report/*.toc

@@ -211,7 +211,5 @@ module.exports = {
   requiresModeratorRoleJson,
   noAuthMiddleware,
   AUTH_ENABLED,
-  AUTH_CREDENTIALS_PRESENT,
-  AUTH_EXPLICITLY_DISABLED,
   getAuthMode
 };

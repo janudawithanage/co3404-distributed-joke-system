@@ -127,6 +127,29 @@ run_sql "$SQL"
 echo ""
 echo "Database hygiene complete."
 
+# ---------------------------------------------------------------------------
+# Reset ECST type caches so in-process cache matches the DB.
+# The test suite writes ecst*/etl*/testing types via the approval flow; these
+# end up in the submit-service and moderate-service types.json cache files on
+# the cache Docker volume.  After deleting them from MySQL we also need to
+# reset the cache files or GET /types / GET /moderate-types will still serve
+# stale data until the next type_update ECST event fires.
+# ---------------------------------------------------------------------------
+echo ""
+echo "  Resetting ECST type caches..."
+
+CANONICAL_TYPES='[{"id":1,"name":"general"},{"id":2,"name":"programming"},{"id":3,"name":"knock-knock"},{"id":4,"name":"dad"},{"id":5,"name":"science"}]'
+
+if [[ -n "$VM1_HOST" ]]; then
+  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${SSH_USER}@${VM1_HOST}" \
+    "echo '$CANONICAL_TYPES' | sudo docker exec -i jokes_submit_service   sh -c 'cat > /app/cache/types.json' && \
+     echo '$CANONICAL_TYPES' | sudo docker exec -i jokes_moderate_service sh -c 'cat > /app/cache/types.json'"
+else
+  echo "$CANONICAL_TYPES" | docker exec -i jokes_submit_service   sh -c 'cat > /app/cache/types.json'
+  echo "$CANONICAL_TYPES" | docker exec -i jokes_moderate_service sh -c 'cat > /app/cache/types.json'
+fi
+echo "  ECST caches reset to 5 seed types."
+
 if [[ "$SKIP_QUEUE" != "1" ]]; then
   echo ""
   purge_queue "${VM1_HOST:-localhost}"

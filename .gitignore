@@ -1,0 +1,59 @@
+node_modules/
+.env
+.env.*
+*.env
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor / OS artefacts — never commit
+**/.DS_Store
+*.swp
+*.swo
+.vscode/*.log
+
+# ── LaTeX build artefacts (keep .tex and .pdf, exclude temp files) ───────────
+report/*.aux
+report/*.toc
+report/*.out
+# Keep .tex source and compiled .pdf
+!report/*.tex
+!report/*.pdf
+!report/*.md
+# Keep example files — they are safe to commit (no real secrets)
+!.env.example
+!infra/.env.vm1.example
+!infra/.env.vm2.example
+!infra/.env.vm3.example
+
+# ── Terraform ────────────────────────────────────────────────────────────────
+infra/terraform/.terraform/
+infra/terraform/.terraform.lock.hcl
+infra/terraform/.terraform.tfstate.lock.info
+infra/terraform/terraform.tfstate
+infra/terraform/terraform.tfstate.backup
+infra/terraform/terraform.tfvars
+infra/terraform/*.tfplan
+# Safety net — catch any *.tfstate that lands anywhere else in the repo
+*.tfstate
+*.tfstate.backup
+
+# ── Kong generated/secret files ──────────────────────────────────────────────
+# kong.yml is the production Kong declarative config for VM4.
+# It is kept in git so deploy.sh can always scp it to VM4 from any clone.
+# When Terraform is active, `terraform apply` regenerates it from kong.yml.tpl
+# and you should commit the result. When editing manually, update both files
+# (see the SYNC RULE comment at the top of each file).
+# kong.local.yml is the local Docker dev config (no secrets) — always committed.
+# TLS certificates contain private keys — never commit
+infra/kong/certs/*.crt
+infra/kong/certs/*.key
+infra/kong/certs/*.pem
+# Keep the certs directory itself in git
+!infra/kong/certs/.gitkeep
+
+# ── Phase 2/3 env files with real IPs/secrets ───────────────────────────────
+infra/.env.vm1
+infra/.env.vm2
+infra/.env.vm3

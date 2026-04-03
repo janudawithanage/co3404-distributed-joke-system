@@ -1,0 +1,135 @@
+# =====================================================================
+# VM1 Docker Compose -- joke-vm (Standard_B2s, 10.0.1.4)
+# =====================================================================
+# Services on this VM:
+#   mysql        - relational database (internal only, no public port)
+#   joke-service - REST API + static frontend (public port 3000)
+#   etl-service  - RabbitMQ consumer (moderated queue) -> DB writer
+#
+# Cross-VM traffic:
+#   ETL -> RabbitMQ on VM2 via RABBITMQ_HOST=10.0.1.5 (private IP)
+#
+# Option 4 changes:
+#   - ETL now consumes 'moderated' queue (not 'submitted_jokes')
+#   - DB_TYPE=mysql (or =mongo with MONGO_URI set)
+#   - joke-service supports MySQL and MongoDB via DB_TYPE
+# =====================================================================
+
+services:
+
+  # ─────────────────────────────────────────────────────────────────
+  # MySQL 8
+  # No ports[] mapping → not accessible from outside this VM.
+  # The joke-service and etl-service reach it via internal DNS
+  # name "mysql" on the vm1_network bridge.
+  # ─────────────────────────────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: jokes_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE:      ${DB_NAME}
+      MYSQL_USER:          ${DB_USER}
+      MYSQL_PASSWORD:      ${DB_PASSWORD}
+    volumes:
+      # Named volume — MySQL data persists across container restarts
+      # and VM reboots (stored in /var/lib/docker/volumes/).
+      - mysql_data:/var/lib/mysql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    # No ports: section — deliberately unexposed to host network.
+    networks:
+      - vm1_network
+    restart: unless-stopped   # auto-restart on VM reboot or crash
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost",
+             "-u", "root", "--password=${DB_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout:  5s
+      retries:  10
+      start_period: 40s
+
+  # ─────────────────────────────────────────────────────────────────
+  # Joke Service — public REST API + static frontend
+  # Port 3000 mapped to host → reachable on VM1 public IP.
+  # NSG rule Allow-JokeAPI allows TCP 3000 from Any.
+  #
+  # Image is built and pushed to Docker Hub by the CI/CD pipeline
+  # (.github/workflows/deploy-joke.yml) on every push to main.
+  # Set JOKE_IMAGE in infra/.env.vm1 (see .env.vm1.example).
+  # To roll back: set JOKE_IMAGE to a previous sha tag and re-run deploy.sh.
+  # ─────────────────────────────────────────────────────────────────
+  joke-service:
+    image: ${JOKE_IMAGE:-your-dockerhub-username/joke-service:latest}
+    container_name: jokes_joke_service
+    environment:
+      DB_TYPE:     ${DB_TYPE:-mysql}   # 'mysql' or 'mongo'
+      DB_HOST:     mysql               # Docker internal DNS (same vm1_network)
+      DB_USER:     ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME:     ${DB_NAME}
+      MONGO_URI:           ${MONGO_URI:-}            # only used when DB_TYPE=mongo
+      PUBLIC_GATEWAY_BASE: ${PUBLIC_GATEWAY_BASE:-}  # set to Kong public URL (e.g. https://<KONG_IP>)
+      PORT:                4000
+    ports:
+      - "3000:4000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - vm1_network
+    restart: unless-stopped
+
+  # ETL Service -- RabbitMQ consumer (moderated queue)
+  # No ports[] mapping -- purely internal worker.
+  # RABBITMQ_HOST points to VM2's private IP (10.0.1.5).
+  # DB is accessed via internal Docker DNS "mysql" (or MONGO_URI for MongoDB).
+  #
+  # Image strategy:
+  #   - If ETL_IMAGE is set in .env.vm1 (populated by deploy-etl.yml CI/CD),
+  #     the pre-built Docker Hub image is used (no rebuild needed on the VM).
+  #   - If ETL_IMAGE is unset, falls back to build: ./etl-service so that
+  #     the first-run deploy.sh workflow continues to work without CI/CD.
+  etl-service:
+    image: ${ETL_IMAGE:-}
+    build:
+      context: ./etl-service
+      dockerfile: Dockerfile
+    container_name: jokes_etl_service
+    environment:
+      DB_TYPE:           ${DB_TYPE:-mysql}   # 'mysql' or 'mongo'
+      DB_HOST:           mysql               # internal DNS on vm1_network
+      DB_USER:           ${DB_USER}
+      DB_PASSWORD:       ${DB_PASSWORD}
+      DB_NAME:           ${DB_NAME}
+      MONGO_URI:         ${MONGO_URI:-}      # only used when DB_TYPE=mongo
+      RABBITMQ_HOST:     ${RABBITMQ_HOST}    # VM2 private IP, e.g. 10.0.1.5
+      RABBITMQ_USER:     ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      PORT:              4001
+    ports:
+      - "3001:4001"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    # IMPORTANT: No depends_on for RabbitMQ — it runs on VM2.
+    # The etl-service/server.js connect-retry loop handles
+    # the case where RabbitMQ is not yet ready at startup.
+    networks:
+      - vm1_network
+    restart: unless-stopped
+
+# ─────────────────────────────────────────────────────────────────
+# Named volumes — managed by Docker, survive container rebuilds.
+# Data location on the VM: /var/lib/docker/volumes/
+# ─────────────────────────────────────────────────────────────────
+volumes:
+  mysql_data:
+    driver: local
+
+# ─────────────────────────────────────────────────────────────────
+# Bridge network — containers on vm1_network reach each other by
+# service name (mysql, joke-service, etl-service) as DNS hostnames.
+# ─────────────────────────────────────────────────────────────────
+networks:
+  vm1_network:
+    driver: bridge

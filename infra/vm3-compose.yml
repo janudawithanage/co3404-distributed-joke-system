@@ -1,0 +1,87 @@
+# =====================================================================
+# VM3 Docker Compose — moderate-vm (Standard_B1s, 10.0.1.7)
+# =====================================================================
+# Services on this VM:
+#   moderate-service — human joke moderation UI + API
+#
+# Cross-VM traffic:
+#   Moderate → RabbitMQ on VM2  via RABBITMQ_HOST=10.0.1.5
+#
+# Authentication:
+#   OIDC via Auth0. Users must log in before accessing the
+#   moderation UI. POST /moderated requires a valid session.
+#   AUTH0_BASE_URL must match the public URL through Kong (VM4).
+#
+# ECST types cache:
+#   The moderate-service subscribes to the "mod_type_update" queue
+#   bound to the "type_update" fanout exchange published by ETL (VM1).
+#   Types are cached locally on the moderate_type_cache Docker volume.
+# =====================================================================
+
+services:
+
+  # ─────────────────────────────────────────────────────────────────
+  # Moderate Service — human moderation UI + API
+  # Port 3300 exposed to host (Kong on VM4 routes to this port).
+  # NSG rule Allow-ModerateAPI allows TCP 3300 from Kong VM4 only.
+  # ─────────────────────────────────────────────────────────────────
+  moderate-service:
+    image: ${DOCKER_IMAGE:-your-dockerhub-username/moderate-service:latest}
+    container_name: jokes_moderate_service
+    environment:
+      # RabbitMQ is on VM2 (private IP)
+      RABBITMQ_HOST:          ${RABBITMQ_HOST}       # e.g. 10.0.1.5
+      RABBITMQ_USER:          ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD:      ${RABBITMQ_PASSWORD}
+
+      # Auth0 OpenID Connect credentials
+      # ─────────────────────────────────────────────────────────────────────
+      # AUTH_ENABLED controls authentication:
+      #   - Set AUTH_ENABLED=false (or leave all AUTH0_* as REPLACE_WITH_*)
+      #     → runs in no-auth mode (anyone can moderate — for dev/demo only)
+      #   - Set real Auth0 credentials + AUTH_ENABLED=true
+      #     → full OIDC login required to access the moderation UI
+      #
+      # To enable Auth0 (BUG-H6 fix):
+      #   1. Create a Regular Web Application at https://auth0.com
+      #   2. Set Allowed Callback URLs: https://<KONG_IP>/callback
+      #   3. Set Allowed Logout URLs:   https://<KONG_IP>/moderate-ui
+      #   4. Fill in AUTH0_* vars below with real values from Auth0 dashboard
+      # ─────────────────────────────────────────────────────────────────────
+      AUTH0_SECRET:           ${AUTH0_SECRET}
+      AUTH0_BASE_URL:         ${AUTH0_BASE_URL}       # https://<KONG_IP>  (NO /moderate suffix — OIDC callback = baseURL + /callback)
+      AUTH0_CLIENT_ID:        ${AUTH0_CLIENT_ID}
+      AUTH0_CLIENT_SECRET:    ${AUTH0_CLIENT_SECRET}
+      AUTH0_ISSUER_BASE_URL:  ${AUTH0_ISSUER_BASE_URL}
+      # AUTH_ENABLED=true requires valid AUTH0_* credentials above.
+      # If any credential is still REPLACE_WITH_*, auth is automatically disabled.
+      AUTH_ENABLED:           ${AUTH_ENABLED:-true}
+      MODERATOR_ROLE:         ${MODERATOR_ROLE:-}
+      AUTH0_ROLES_CLAIM:      ${AUTH0_ROLES_CLAIM:-}
+
+      PORT: 4300
+    ports:
+      - "3300:4300"
+    volumes:
+      # Named volume — types cache persists across container restarts and VM reboots
+      - moderate_type_cache:/app/cache
+    networks:
+      - vm3_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4300/health"]
+      interval: 15s
+      timeout:  5s
+      retries:  5
+      start_period: 30s
+
+# ─────────────────────────────────────────────────────────────────
+# Named volumes
+# ─────────────────────────────────────────────────────────────────
+volumes:
+  moderate_type_cache:
+    driver: local
+
+networks:
+  vm3_network:
+    driver: bridge

@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <base href="/joke-ui/" />
+  <title>Distributed Joke Platform</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎭</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Design Tokens ───────────────────────────────────────── */
+    :root {
+      --bg: #0a0f1d;
+      --bg-soft: #0f1729;
+      --surface: rgba(255,255,255,0.03);
+      --card: rgba(255,255,255,0.06);
+      --stroke: rgba(255,255,255,0.08);
+      --text: #e7eefb;
+      --muted: #95a4c7;
+      --accent: #5ce1e6;
+      --accent-strong: #c5ff7a;
+      --danger: #ff6b6b;
+      --success: #7cf6c4;
+      --radius: 16px;
+    }
+
+    /* ── Reset & Globals ─────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Space Grotesk', 'Inter', system-ui, -apple-system, sans-serif;
+      line-height: 1.6;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    .wrapper {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ── Ambient Background ──────────────────────────────────── */
+    body::before {
+      content: '';
+      position: fixed;
+      top: -200px; left: -200px;
+      width: 600px; height: 600px;
+      background: radial-gradient(circle, rgba(92,225,230,0.12) 0%, transparent 70%);
+      z-index: 0;
+      pointer-events: none;
+    }
+    body::after {
+      content: '';
+      position: fixed;
+      bottom: -200px; right: -200px;
+      width: 500px; height: 500px;
+      background: radial-gradient(circle, rgba(197,255,122,0.08) 0%, transparent 70%);
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    /* ── Navigation ──────────────────────────────────────────── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(10,15,29,0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--stroke);
+      padding: 12px 0;
+    }
+    .nav-inner {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+    .nav-brand {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--accent);
+      text-decoration: none;
+      letter-spacing: -0.02em;
+    }
+    .nav-links { display: flex; gap: 6px; flex-wrap: wrap; }
+    .nav-link {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      padding: 8px 14px;
+      border-radius: 10px;
+      transition: all 0.2s ease;
+    }
+    .nav-link:hover { color: var(--text); background: var(--surface); }
+    .nav-link.active { color: var(--accent); background: rgba(92,225,230,0.08); }
+
+    /* ── Hero ─────────────────────────────────────────────────── */
+    .hero {
+      position: relative; z-index: 1;
+      padding: 72px 0 48px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 48px;
+      align-items: center;
+    }
+    .hero-text h1 {
+      font-size: 48px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+    }
+    .hero-text h1 span { color: var(--accent); }
+    .hero-text p {
+      color: var(--muted);
+      font-size: 17px;
+      margin-top: 16px;
+      max-width: 440px;
+      line-height: 1.7;
+    }
+    .hero-actions {
+      display: flex; gap: 12px; margin-top: 28px; flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center; gap: 8px;
+      padding: 14px 26px;
+      border-radius: 14px;
+      font-size: 15px;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s ease;
+      text-decoration: none;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+      color: #04101a;
+      box-shadow: 0 12px 40px rgba(92,225,230,0.25);
+    }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 16px 48px rgba(92,225,230,0.35); }
+    .btn-outline {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--stroke);
+    }
+    .btn-outline:hover { border-color: rgba(92,225,230,0.4); background: rgba(92,225,230,0.06); }
+
+    .hero-stats {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .stat-card {
+      background: var(--card);
+      border: 1px solid var(--stroke);
+      border-radius: 18px;
+      padding: 20px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .stat-card:hover { border-color: rgba(92,225,230,0.3); transform: translateY(-2px); }
+    .stat-icon { font-size: 28px; }
+    .stat-label { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .stat-value { font-size: 24px; font-weight: 700; margin-top: 2px; }
+    .stat-value.accent { color: var(--accent); }
+
+    /* ── Section Headings ────────────────────────────────────── */
+    .section { position: relative; z-index: 1; padding: 48px 0; }
+    .section-head {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 24px; flex-wrap: wrap; gap: 12px;
+    }
+    .section-head h2 { font-size: 26px; letter-spacing: -0.01em; }
+    .section-head h2 span { color: var(--accent); font-weight: 400; }
+
+    /* ── Joke Browser ────────────────────────────────────────── */
+    .controls {
+      display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    }
+    select, input[type="number"] {
+      background: var(--card);
+      border: 1px solid var(--stroke);
+      color: var(--text);
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 15px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    select:focus, input:focus { border-color: rgba(92,225,230,0.6); }
+    input[type="number"] { width: 80px; }
+
+    .btn-sm {
+      padding: 10px 20px;
+      font-size: 14px;
+      border-radius: 12px;
+    }
+
+    #jokesContainer {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px;
+      margin-top: 20px;
+      min-height: 120px;
+    }
+
+    .joke-card {
+      background: var(--card);
+      border: 1px solid var(--stroke);
+      border-radius: 18px;
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
+      animation: cardIn 0.35s ease;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .joke-card:hover { border-color: rgba(92,225,230,0.25); transform: translateY(-2px); }
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .type-badge {
+      display: inline-block;
+      background: rgba(92,225,230,0.12);
+      color: var(--accent);
+      padding: 4px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 12px;
+    }
+    .joke-card .setup {
+      font-size: 16px;
+      font-weight: 600;
+      line-height: 1.5;
+      margin-bottom: 10px;
+    }
+    .joke-card .timer {
+      color: var(--muted);
+      font-size: 13px;
+      font-style: italic;
+    }
+    .joke-card .punchline {
+      font-size: 15px;
+      color: var(--accent-strong);
+      font-weight: 600;
+      opacity: 0;
+      max-height: 0;
+      overflow: hidden;
+      transition: opacity 0.4s ease, max-height 0.4s ease;
+    }
+    .joke-card .punchline.revealed {
+      opacity: 1;
+      max-height: 200px;
+    }
+    .empty-state {
+      grid-column: 1 / -1;
+      text-align: center;
+      color: var(--muted);
+      padding: 40px 0;
+      font-size: 15px;
+    }
+
+    /* ── Submit Section ──────────────────────────────────────── */
+    .submit-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .submit-grid .full { grid-column: 1 / -1; }
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-group label {
+      color: var(--muted); font-size: 13px;
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    textarea, .form-group select, .form-group input {
+      width: 100%;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--stroke);
+      color: var(--text);
+      padding: 12px 14px;
+      border-radius: 12px;
+      font-size: 15px;
+      font-family: inherit;
+      resize: vertical;
+    }
+    textarea:focus, .form-group select:focus, .form-group input:focus {
+      outline: 2px solid rgba(92,225,230,0.3);
+      border-color: rgba(92,225,230,0.6);
+    }
+    .submit-actions {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    #submit-alert {
+      font-size: 14px;
+      transition: opacity 0.3s;
+    }
+
+    /* ── Architecture Section ────────────────────────────────── */
+    .arch-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 14px;
+    }
+    .arch-card {
+      background: var(--surface);
+      border: 1px solid var(--stroke);
+      border-radius: 14px;
+      padding: 18px;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .arch-card:hover { border-color: rgba(92,225,230,0.3); transform: translateY(-2px); }
+    .arch-card .arch-icon { font-size: 24px; margin-bottom: 8px; }
+    .arch-card strong { display: block; font-size: 15px; margin-bottom: 6px; }
+    .arch-card span { color: var(--muted); font-size: 13px; line-height: 1.5; }
+
+    /* ── Footer ──────────────────────────────────────────────── */
+    footer {
+      position: relative; z-index: 1;
+      margin: 48px 0 16px;
+      color: var(--muted);
+      text-align: center;
+      font-size: 13px;
+      padding: 24px 0 16px;
+      border-top: 1px solid var(--stroke);
+    }
+    footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+
+    /* ── Skeleton Loader ─────────────────────────────────────── */
+    .skeleton {
+      background: linear-gradient(90deg, var(--card) 25%, rgba(255,255,255,0.06) 50%, var(--card) 75%);
+      background-size: 400% 100%;
+      animation: shimmer 1.4s ease infinite;
+      border-radius: 12px;
+    }
+    @keyframes shimmer {
+      0%   { background-position: 100% 0; }
+      100% { background-position: -100% 0; }
+    }
+
+    /* ── Responsive ──────────────────────────────────────────── */
+    @media (max-width: 960px) {
+      .hero { grid-template-columns: 1fr; padding: 48px 0 32px; }
+      .hero-stats { flex-direction: row; flex-wrap: wrap; }
+      .stat-card { flex: 1; min-width: 160px; }
+      .submit-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 640px) {
+      .hero-text h1 { font-size: 32px; }
+      .nav-links { gap: 2px; }
+      .nav-link { padding: 6px 10px; font-size: 13px; }
+      #jokesContainer { grid-template-columns: 1fr; }
+      .arch-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── Navigation ──────────────────────────────────────────── -->
+  <nav>
+    <div class="nav-inner">
+      <a class="nav-brand" href="#">🎭 JokePlatform</a>
+      <div class="nav-links">
+        <a class="nav-link active" href="#jokes">Browse</a>
+        <a class="nav-link" href="#submit-section">Submit</a>
+        <a class="nav-link" href="#architecture">Architecture</a>
+        <a class="nav-link" id="nav-submit-ui" href="/submit/" target="_blank">Submit UI</a>
+        <a class="nav-link" id="nav-moderate-ui" href="/moderate-ui/" target="_blank">Moderate</a>
+        <a class="nav-link" id="nav-api-docs" href="/docs" target="_blank">API Docs</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="wrapper">
+
+    <!-- ── Hero Section ──────────────────────────────────────── -->
+    <header class="hero" id="top">
+      <div class="hero-text">
+        <h1>Distributed <span>Joke</span> Platform</h1>
+        <p>
+          Four loosely-coupled microservices, RabbitMQ
+          pub/sub messaging, ECST event-driven caching, Kong API Gateway,
+          Auth0 OIDC, MySQL + MongoDB.
+        </p>
+        <div class="hero-actions">
+          <button class="btn btn-primary" id="cta-get-started">⚡ Get Jokes</button>
+          <a class="btn btn-outline" href="#submit-section" id="cta-submit">✏️ Submit a Joke</a>
+        </div>
+      </div>
+      <div class="hero-stats">
+        <div class="stat-card">
+          <div class="stat-icon">📂</div>
+          <div>
+            <div class="stat-label">Joke Types</div>
+            <div class="stat-value accent" id="metric-types">—</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">🎯</div>
+          <div>
+            <div class="stat-label">Jokes Served</div>
+            <div class="stat-value" id="metric-jokes">0</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">💚</div>
+          <div>
+            <div class="stat-label">System Status</div>
+            <div class="stat-value" id="health-indicator" style="font-size:14px;">Checking…</div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- ── Browse Jokes ──────────────────────────────────────── -->
+    <section class="section" id="jokes">
+      <div class="section-head">
+        <h2>Browse <span>Jokes</span></h2>
+        <div class="controls">
+          <select id="typeSelect" aria-label="Joke type">
+            <option value="any">Any type</option>
+          </select>
+          <input type="number" id="countInput" value="3" min="1" max="20" aria-label="Number of jokes" />
+          <button class="btn btn-primary btn-sm" id="getJokeBtn">Fetch jokes</button>
+          <button class="btn btn-outline btn-sm" id="refresh-types" title="Reload type list">↻ Types</button>
+        </div>
+      </div>
+      <div id="jokesContainer">
+        <div class="empty-state">Select a type and press <strong>Fetch jokes</strong> to begin.</div>
+      </div>
+    </section>
+
+    <!-- ── Submit a Joke ─────────────────────────────────────── -->
+    <section class="section" id="submit-section">
+      <div class="section-head">
+        <h2>Submit <span>a Joke</span></h2>
+      </div>
+      <div class="submit-grid">
+        <div class="form-group">
+          <label for="submit-setup">Setup (Question)</label>
+          <textarea id="submit-setup" rows="2" placeholder="Why did the developer quit their job?"></textarea>
+        </div>
+        <div class="form-group">
+          <label for="submit-punchline">Punchline (Answer)</label>
+          <textarea id="submit-punchline" rows="2" placeholder="Because they didn't get arrays!"></textarea>
+        </div>
+        <div class="form-group">
+          <label for="submit-type">Type</label>
+          <select id="submit-type">
+            <option value="">Select type</option>
+          </select>
+        </div>
+        <div class="submit-actions">
+          <button class="btn btn-primary btn-sm" id="submit-btn">Queue for moderation</button>
+          <span id="submit-alert"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Architecture ──────────────────────────────────────── -->
+    <section class="section" id="architecture">
+      <div class="section-head">
+        <h2>System <span>Architecture</span></h2>
+      </div>
+      <div class="arch-grid">
+        <div class="arch-card">
+          <div class="arch-icon">🎭</div>
+          <strong>Joke Service</strong>
+          <span>Reads jokes from MySQL/MongoDB. Serves this homepage. Stateless — horizontally scalable.</span>
+        </div>
+        <div class="arch-card">
+          <div class="arch-icon">📤</div>
+          <strong>Submit Service</strong>
+          <span>Publishes jokes to the RabbitMQ "submit" queue. Never writes to DB directly.</span>
+        </div>
+        <div class="arch-card">
+          <div class="arch-icon">⚖️</div>
+          <strong>Moderate Service</strong>
+          <span>Auth0 OIDC-protected. Human approves/rejects jokes from the queue before DB entry.</span>
+        </div>
+        <div class="arch-card">
+          <div class="arch-icon">⚙️</div>
+          <strong>ETL Service</strong>
+          <span>Consumes "moderated" queue → writes to DB → emits ECST type_update events.</span>
+        </div>
+        <div class="arch-card">
+          <div class="arch-icon">🐇</div>
+          <strong>RabbitMQ</strong>
+          <span>Durable queues, persistent messages, fanout exchange for ECST. At-least-once delivery.</span>
+        </div>
+        <div class="arch-card">
+          <div class="arch-icon">🛡️</div>
+          <strong>Kong Gateway</strong>
+          <span>DB-less declarative config. Rate limiting, correlation-id, TLS termination, path routing.</span>
+        </div>
+        <div class="arch-card">
+          <div class="arch-icon">🗄️</div>
+          <strong>MySQL + MongoDB</strong>
+          <span>Switchable via DB_TYPE env. Unified adapter pattern across joke-service and ETL.</span>
+        </div>
+        <div class="arch-card">
+          <div class="arch-icon">☁️</div>
+          <strong>Azure + Terraform</strong>
+          <span>4 VMs, VNet, NSGs. Terraform provisions Kong VM. GitHub Actions CI/CD pipeline.</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Footer ────────────────────────────────────────────── -->
+    <footer>
+      Distributed Joke Platform ·
+      <a id="footer-api-docs" href="/docs" target="_blank">API Docs</a> ·
+      <a href="https://github.com" target="_blank">GitHub</a>
+    </footer>
+
+  </div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

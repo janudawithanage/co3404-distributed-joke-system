@@ -1,0 +1,64 @@
+# =============================================================================
+# infra/kong/docker-compose.yml
+#
+# Kong API Gateway in DB-less (declarative config) mode.
+#
+# Volume mounts (relative to this file's directory /home/azureuser/kong/):
+#   ./kong.yml        → /etc/kong/kong.yml      (routes/services/plugins config)
+#   ./certs           → /etc/kong/certs         (TLS certificate + key)
+#
+# Ports exposed to host:
+#   80  → Kong HTTP proxy  (plain-text; useful for curl -k testing)
+#   443 → Kong HTTPS proxy (TLS terminated by Kong using ./certs/server.crt)
+#
+# Admin API (port 8001) is bound to 127.0.0.1 only — no external access.
+# =============================================================================
+
+services:
+  kong:
+    image:          kong:3.9
+    container_name: kong_gateway
+    restart:        unless-stopped
+
+    environment:
+      # Run without a database — all config loaded from declarative YAML file.
+      # DB-less mode is production-ready for static route configurations.
+      KONG_DATABASE:           "off"
+      KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
+
+      # Proxy listeners:
+      #   Port 80  — plain HTTP (for quick testing without -k flag)
+      #   Port 443 — HTTPS with TLS termination using the mounted certificate
+      KONG_PROXY_LISTEN: >-
+        0.0.0.0:80 reuseport backlog=16384,
+        0.0.0.0:443 ssl reuseport backlog=16384
+
+      # TLS certificate paths (inside the container after volume mount)
+      KONG_SSL_CERT:     /etc/kong/certs/server.crt
+      KONG_SSL_CERT_KEY: /etc/kong/certs/server.key
+
+      # Admin API — localhost only, never exposed to internet.
+      # Useful for: curl http://127.0.0.1:8001/routes  (on the VM itself)
+      KONG_ADMIN_LISTEN: 127.0.0.1:8001
+
+      # Logging — write to stdout/stderr for `docker compose logs` access
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG:  /dev/stderr
+      KONG_ADMIN_ACCESS_LOG: /dev/null
+      KONG_ADMIN_ERROR_LOG:  /dev/stderr
+      KONG_LOG_LEVEL:        info
+
+    volumes:
+      - ./kong.yml:/etc/kong/kong.yml:ro
+      - ./certs:/etc/kong/certs:ro
+
+    ports:
+      - "80:80"
+      - "443:443"
+
+    healthcheck:
+      test:         ["CMD", "kong", "health"]
+      interval:     10s
+      timeout:      5s
+      retries:      6
+      start_period: 30s

@@ -1,0 +1,133 @@
+# =============================================================================
+# .github/workflows/deploy-etl.yml
+#
+# CD Pipeline: Build + push etl-service Docker image, then deploy to VM1.
+#
+# Triggers on push to main branch when files under etl-service/ change.
+#
+# Required GitHub Secrets (Settings → Secrets → Actions):
+#   DOCKER_HUB_USERNAME   - Docker Hub username (same as for other services)
+#   DOCKER_HUB_TOKEN      - Docker Hub access token
+#   VM1_HOST              - Public IP address of VM1 (joke-vm)
+#   VM1_SSH_PRIVATE_KEY   - PEM-encoded SSH private key for azureuser@VM1
+#                           (same key as co3404_key used in deploy.sh)
+#
+# Image: <DOCKER_HUB_USERNAME>/etl-service  tagged :sha + :latest
+#
+# WHY THIS EXISTS:
+#   Previously etl-service had no CI/CD — it was always built from source
+#   on VM1 by deploy.sh. This workflow adds automatic Docker Hub push and
+#   container replace on every code change to etl-service, consistent with
+#   the other three service pipelines.
+#
+# NOTE: The vm1-compose.yml still uses `build: ./etl-service` so that the
+#       first-run deploy.sh continues to work without Docker Hub.  To switch
+#       to the pre-built image set ETL_IMAGE in infra/.env.vm1 and change
+#       the vm1-compose.yml to `image: ${ETL_IMAGE}`.
+# =============================================================================
+
+name: Deploy ETL Service
+
+on:
+  # Deployment requires secrets (DOCKER_HUB_TOKEN, VM1_HOST, VM1_SSH_PRIVATE_KEY, etc.)
+  # Trigger manually: GitHub → Actions → Deploy etl-service → Run workflow
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/etl-service
+
+jobs:
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.sha_tag }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Generate image tags
+        id: meta
+        run: |
+          SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "sha_tag=${{ env.IMAGE_NAME }}:${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=${{ env.IMAGE_NAME }}:latest"    >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./etl-service
+          file:    ./etl-service/Dockerfile
+          push:    true
+          tags: |
+            ${{ steps.meta.outputs.sha_tag }}
+            ${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+  deploy:
+    name: Deploy to VM1
+    runs-on: ubuntu-latest
+    needs:   build-and-push
+    environment: production
+
+    steps:
+      - name: Deploy to VM1 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.VM1_HOST }}
+          username: azureuser
+          key:      ${{ secrets.VM1_SSH_PRIVATE_KEY }}
+          timeout:  60s
+          script: |
+            cd ~/co3404
+
+            # Ensure .env exists
+            touch .env
+
+            # Upsert ETL_IMAGE so the compose file uses the pre-built image
+            IMAGE="${{ env.IMAGE_NAME }}:latest"
+            grep -q '^ETL_IMAGE=' .env \
+              && sed -i "s|^ETL_IMAGE=.*|ETL_IMAGE=${IMAGE}|" .env \
+              || echo "ETL_IMAGE=${IMAGE}" >> .env
+
+            # Pull the freshly-built image from Docker Hub
+            sudo docker compose pull etl-service 2>/dev/null || true
+
+            # Replace the running container with the new image
+            sudo docker compose up -d --force-recreate etl-service
+
+            # Free disk space
+            sudo docker image prune -f
+
+            echo "Deployed ${{ needs.build-and-push.outputs.image_tag }} to VM1 (etl-service)"
+
+      - name: Health check
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.VM1_HOST }}
+          username: azureuser
+          key:      ${{ secrets.VM1_SSH_PRIVATE_KEY }}
+          script: |
+            for i in $(seq 1 6); do
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/health || echo "000")
+              echo "Attempt $i: HTTP $STATUS"
+              if [ "$STATUS" = "200" ]; then
+                echo "ETL health check passed ✅"
+                exit 0
+              fi
+              sleep 5
+            done
+            echo "ETL health check FAILED after 30s ❌"
+            exit 1

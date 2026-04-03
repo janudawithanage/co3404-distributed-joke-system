@@ -1,0 +1,144 @@
+# =============================================================================
+# .github/workflows/deploy-submit.yml
+#
+# CD Pipeline: Build + push submit-service Docker image, then deploy to VM2.
+#
+# Triggers on push to main branch when files under submit-service/ change.
+#
+# Required GitHub Secrets (Settings → Secrets → Actions):
+#   DOCKER_HUB_USERNAME   - Docker Hub username (same as for other services)
+#   DOCKER_HUB_TOKEN      - Docker Hub access token
+#   VM2_HOST              - Public IP address of VM2 (submit-vm)
+#   VM2_SSH_PRIVATE_KEY   - PEM-encoded SSH private key for azureuser@VM2
+#                           (same key as co3404_key used in deploy.sh)
+#   KONG_PUBLIC_URL       - Full public URL of the Kong gateway, e.g. https://1.2.3.4
+#                           Written into ~/co3404/.env as PUBLIC_GATEWAY_BASE so
+#                           Swagger 'Try it out' targets Kong instead of localhost.
+#
+# Image: <DOCKER_HUB_USERNAME>/submit-service  tagged :sha + :latest
+#
+# WHY THIS EXISTS:
+#   Previously submit-service had no CI/CD. VM2 ran whatever image was built
+#   the first time deploy.sh was executed — it never automatically updated.
+#   This caused the hosted submit UI (type dropdown, success message, 429 handler)
+#   to be perpetually stale while the moderate-service stayed current.
+# =============================================================================
+
+name: Deploy Submit Service
+
+on:
+  # Deployment requires secrets (DOCKER_HUB_TOKEN, VM2_HOST, VM2_SSH_PRIVATE_KEY, etc.)
+  # Trigger manually: GitHub → Actions → Deploy submit-service → Run workflow
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/submit-service
+
+jobs:
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.sha_tag }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Generate image tags
+        id: meta
+        run: |
+          SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "sha_tag=${{ env.IMAGE_NAME }}:${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=${{ env.IMAGE_NAME }}:latest"    >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./submit-service
+          file:    ./submit-service/Dockerfile
+          push:    true
+          tags: |
+            ${{ steps.meta.outputs.sha_tag }}
+            ${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+  deploy:
+    name: Deploy to VM2
+    runs-on: ubuntu-latest
+    needs:   build-and-push
+    environment: production
+
+    steps:
+      - name: Deploy to VM2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.VM2_HOST }}
+          username: azureuser
+          key:      ${{ secrets.VM2_SSH_PRIVATE_KEY }}
+          timeout:  60s
+          script: |
+            cd ~/co3404
+
+            # Ensure .env exists (will be populated by deploy.sh on first run;
+            # this step keeps PUBLIC_GATEWAY_BASE and SUBMIT_IMAGE current on
+            # every CI/CD deploy so they never become stale after a Kong IP change).
+            touch .env
+
+            # Upsert PUBLIC_GATEWAY_BASE (update if exists, append if missing)
+            KONG_URL="${{ secrets.KONG_PUBLIC_URL }}"
+            if [ -n "$KONG_URL" ]; then
+              grep -q '^PUBLIC_GATEWAY_BASE=' .env \
+                && sed -i "s|^PUBLIC_GATEWAY_BASE=.*|PUBLIC_GATEWAY_BASE=${KONG_URL}|" .env \
+                || echo "PUBLIC_GATEWAY_BASE=${KONG_URL}" >> .env
+            fi
+
+            # Upsert SUBMIT_IMAGE (ensures compose pulls the correct image name)
+            IMAGE="${{ env.IMAGE_NAME }}:latest"
+            grep -q '^SUBMIT_IMAGE=' .env \
+              && sed -i "s|^SUBMIT_IMAGE=.*|SUBMIT_IMAGE=${IMAGE}|" .env \
+              || echo "SUBMIT_IMAGE=${IMAGE}" >> .env
+
+            # Pull the freshly-built image from Docker Hub
+            sudo docker compose pull submit-service
+
+            # Replace the running container with the new image.
+            # --force-recreate ensures the container is restarted even when
+            # only the image layer changed (not the compose config).
+            sudo docker compose up -d --force-recreate submit-service
+
+            # Free disk space — removes old image layers no longer referenced
+            sudo docker image prune -f
+
+            echo "Deployed ${{ needs.build-and-push.outputs.image_tag }} to VM2 successfully"
+
+      - name: Health check
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.VM2_HOST }}
+          username: azureuser
+          key:      ${{ secrets.VM2_SSH_PRIVATE_KEY }}
+          script: |
+            # Wait up to 30s for the service to become healthy
+            for i in $(seq 1 6); do
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3200/health || echo "000")
+              echo "Attempt $i: HTTP $STATUS"
+              if [ "$STATUS" = "200" ]; then
+                echo "Health check passed ✅"
+                exit 0
+              fi
+              sleep 5
+            done
+            echo "Health check FAILED after 30s ❌"
+            exit 1

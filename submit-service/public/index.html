@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <base href="/submit/" />
+  <title>Submit a Joke · Distributed Joke Platform</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📤</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0a0f1d;
+      --surface: rgba(255,255,255,0.04);
+      --card: rgba(255,255,255,0.06);
+      --stroke: rgba(255,255,255,0.08);
+      --accent: #5ce1e6;
+      --accent-strong: #c5ff7a;
+      --text: #e7eefb;
+      --muted: #95a4c7;
+      --success: #7cf6c4;
+      --error: #ff6b6b;
+      --radius: 16px;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Space Grotesk', 'Inter', system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 28px 16px 40px;
+    }
+    body::before {
+      content: '';
+      position: fixed;
+      top: -180px; left: -180px;
+      width: 500px; height: 500px;
+      background: radial-gradient(circle, rgba(92,225,230,0.1) 0%, transparent 70%);
+      z-index: 0; pointer-events: none;
+    }
+
+    .page {
+      position: relative; z-index: 1;
+      width: 100%; max-width: 640px;
+      display: flex; flex-direction: column; gap: 24px;
+    }
+
+    /* ── Header ────────────────────────────────────────────── */
+    header { text-align: center; }
+    header h1 {
+      font-size: 36px; font-weight: 700; letter-spacing: -0.02em;
+    }
+    header h1 span { color: var(--accent); }
+    header p { color: var(--muted); margin-top: 8px; line-height: 1.6; font-size: 15px; }
+
+    /* ── Card ─────────────────────────────────────────────── */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--stroke);
+      border-radius: 22px;
+      padding: 28px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+      display: flex; flex-direction: column; gap: 18px;
+    }
+
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-group label {
+      color: var(--muted); font-size: 13px;
+      text-transform: uppercase; letter-spacing: 0.04em; font-weight: 500;
+    }
+    .char-count {
+      font-size: 12px; color: var(--muted); text-align: right; margin-top: 2px;
+    }
+    .char-count.warn { color: var(--error); }
+
+    input, textarea, select {
+      width: 100%;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--stroke);
+      color: var(--text);
+      padding: 12px 14px;
+      border-radius: 14px;
+      font-size: 16px;
+      font-family: inherit;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    textarea { min-height: 90px; resize: vertical; }
+    input:focus, textarea:focus, select:focus {
+      outline: none;
+      border-color: rgba(92,225,230,0.6);
+      box-shadow: 0 0 0 3px rgba(92,225,230,0.15);
+    }
+
+    .type-row { display: flex; gap: 10px; align-items: flex-end; }
+    .type-row input { display: none; }
+
+    /* ── Button ───────────────────────────────────────────── */
+    .btn {
+      width: 100%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+      color: #04101a;
+      border: none;
+      padding: 14px;
+      border-radius: 14px;
+      font-size: 16px;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      box-shadow: 0 12px 40px rgba(92,225,230,0.25);
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 16px 48px rgba(92,225,230,0.35); }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+    .btn .spinner {
+      width: 16px; height: 16px;
+      border: 3px solid rgba(0,0,0,0.2);
+      border-top-color: #04101a;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      display: none;
+    }
+    .btn.loading .spinner { display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Alert ────────────────────────────────────────────── */
+    .alert {
+      padding: 14px 16px;
+      border-radius: 12px;
+      border: 1px solid var(--stroke);
+      font-size: 14px;
+      display: none;
+      animation: fadeIn 0.25s ease;
+    }
+    .alert.visible { display: block; }
+    .alert-success { color: var(--success); border-color: rgba(124,246,196,0.4); background: rgba(124,246,196,0.06); }
+    .alert-error { color: var(--error); border-color: rgba(255,107,107,0.4); background: rgba(255,107,107,0.06); }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* ── Flow Indicator ──────────────────────────────────── */
+    .flow {
+      background: var(--surface);
+      border: 1px solid var(--stroke);
+      border-radius: 14px;
+      padding: 14px 18px;
+      display: flex; align-items: center; gap: 10px;
+      font-size: 13px; color: var(--muted); line-height: 1.5;
+    }
+    .flow .icon { font-size: 18px; flex-shrink: 0; }
+
+    /* ── Footer ──────────────────────────────────────────── */
+    .footer-links {
+      display: flex; gap: 16px; justify-content: center;
+      color: var(--muted); font-size: 14px;
+    }
+    .footer-links a { color: var(--accent); text-decoration: none; }
+    .footer-links a:hover { text-decoration: underline; }
+
+    @media (max-width: 640px) {
+      header h1 { font-size: 28px; }
+      .card { padding: 20px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <h1>Submit a <span>Joke</span></h1>
+      <p>Queue your wit for human moderation. Your joke travels through RabbitMQ to a moderator before entering the database.</p>
+    </header>
+
+    <div class="card">
+      <div class="form-group">
+        <label for="setup">Setup (Question)</label>
+        <textarea id="setup" rows="2" placeholder="Why did the developer go broke?" maxlength="500"></textarea>
+        <div class="char-count"><span id="setup-count">0</span>/500</div>
+      </div>
+
+      <div class="form-group">
+        <label for="punchline">Punchline (Answer)</label>
+        <textarea id="punchline" rows="2" placeholder="Because they used up all their cache!" maxlength="500"></textarea>
+        <div class="char-count"><span id="punchline-count">0</span>/500</div>
+      </div>
+
+      <div class="form-group">
+        <label>Joke Type</label>
+        <div class="type-row">
+          <select id="typeSelect" aria-label="Select joke type"></select>
+          <input id="typeCustom" type="text" placeholder="Custom type…" maxlength="50" aria-label="Custom joke type" />
+        </div>
+      </div>
+
+      <div id="alertBox" class="alert" role="alert"></div>
+
+      <button class="btn" id="submitBtn" type="button">
+        <span class="spinner"></span>
+        <span class="btn-text">Submit to queue</span>
+      </button>
+    </div>
+
+    <div class="flow">
+      <span class="icon">📡</span>
+      <span>Your joke → RabbitMQ "submit" queue → Human moderator → ETL → Database</span>
+    </div>
+
+    <div class="footer-links">
+      <a href="/docs" target="_blank" rel="noreferrer">Swagger API Docs</a>
+      <a href="/joke-ui" target="_blank" rel="noreferrer">Homepage</a>
+      <a href="/moderate-ui" target="_blank" rel="noreferrer">Moderate</a>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

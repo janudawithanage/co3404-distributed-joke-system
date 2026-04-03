@@ -1,0 +1,316 @@
+# =============================================================================
+# infra/kong/kong.yml  (PRODUCTION - Azure VM deployment)
+#
+# Kong declarative configuration for VM4 (kong-vm).
+# Kept in sync with infra/terraform/kong.yml.tpl (Terraform template source).
+#
+# SYNC RULE: when editing this file also apply the same change to kong.yml.tpl
+# so that a future `terraform apply` does not overwrite your fixes.
+# When Terraform IS active, edit the template instead and let apply regenerate.
+#
+# Service routing (Kong on VM4 -> private IPs):
+#   joke-service     -> http://10.0.1.4:3000  (VM1)
+#   submit-service   -> http://10.0.1.5:3200  (VM2)
+#   moderate-service -> http://10.0.1.7:3300  (VM3)
+#   rabbitmq mgmt    -> http://10.0.1.5:15672 (VM2 RabbitMQ management UI)
+#
+# Public routes exposed through Kong:
+#   GET  /joke/:type       -> joke-service API
+#   GET  /health           -> joke-service health check
+#   GET  /config.js        -> runtime config (gatewayBase, jokeServiceBase, etc.)
+#   GET  /types            -> submit-service ECST types cache
+#   GET  /joke-ui          -> joke-service frontend
+#   GET  /submit           -> submit-service frontend
+#   POST /submit           -> submit-service API
+#   GET  /docs             -> submit-service Swagger UI
+#   GET  /moderate-ui      -> moderate-service frontend (Auth0 protected)
+#   GET  /moderate         -> moderate-service API (Auth0 protected)
+#   POST /moderated        -> moderate-service API (Auth0 protected)
+#   POST /reject           -> moderate-service API (Auth0 protected)
+#   GET  /moderate-types   -> moderate-service ECST types cache
+#   *    /login,/logout,/callback,/me  -> Auth0 OIDC flow (moderate-service)
+#   *    /mq-admin         -> RabbitMQ management UI (IP-restricted)
+#   *    /api              -> RabbitMQ management API (IP-restricted)
+#   GET  /etl-health       -> ETL service health check
+# =============================================================================
+
+_format_version: "3.0"
+_transform: true
+
+# =============================================================================
+# Global Plugins - applied to every request through Kong
+# =============================================================================
+plugins:
+  - name: correlation-id
+    config:
+      header_name:     Kong-Request-ID
+      generator:       uuid
+      echo_downstream: true
+
+# =============================================================================
+# Services and Routes
+# =============================================================================
+services:
+
+  # ---------------------------------------------------------------------------
+  # Joke Service - VM1 (10.0.1.4:3000)
+  #
+  # GET /joke/:type  -> API: fetch jokes by type
+  # GET /types       -> List all joke categories
+  # GET /joke-ui     -> Joke Machine HTML frontend
+  #
+  # Rate limiting: 5 requests/minute per client IP.
+  # ---------------------------------------------------------------------------
+  - name: joke-service
+    url:             http://10.0.1.4:3000
+    connect_timeout: 5000
+    read_timeout:    10000
+    write_timeout:   10000
+    retries:         3
+
+    routes:
+      - name:          joke-route
+        paths:         [/joke]
+        strip_path:    false
+        preserve_host: false
+        methods:       [GET, HEAD, OPTIONS]
+        # Rate limiting at ROUTE level only — /joke-ui is never rate-limited.
+        plugins:
+          - name: rate-limiting
+            config:
+              minute:              5
+              policy:              local
+              error_code:          429
+              error_message:       "Rate limit exceeded - Joke API allows 5 req/min. Retry after 60 seconds."
+              hide_client_headers: false
+
+      - name:          joke-frontend-route
+        paths:         [/joke-ui]
+        strip_path:    true
+        preserve_host: false
+        methods:       [GET, HEAD, OPTIONS]
+
+      # Route /health → joke-service health check
+      # Required by the Joke UI dashboard "System Status" stat card.
+      # Without this route the card stays stuck on "Checking…" (BUG-L1).
+      - name:          joke-health-route
+        paths:         [/health]
+        strip_path:    false
+        preserve_host: false
+        methods:       [GET, HEAD]
+
+      # Route /config.js → runtime config injected by joke-service
+      # Delivers window.APP_CONFIG so the frontend's app.js knows the
+      # Kong gateway base URL for all subsequent API calls.
+      # Without this the "Joke Types" stat card shows "—" (BUG-L2).
+      - name:          joke-config-route
+        paths:         [/config.js]
+        strip_path:    false
+        preserve_host: false
+        methods:       [GET, HEAD]
+
+  # ---------------------------------------------------------------------------
+  # Submit Service - VM2 (10.0.1.5:3200)
+  #
+  # GET  /submit   -> Submit Joke HTML frontend
+  # POST /submit   -> Joke submission API (publishes to 'submit' queue)
+  # GET  /types    -> Joke types via ECST cache (no HTTP proxy to joke-service)
+  # GET  /docs     -> Swagger / OpenAPI documentation UI
+  # ---------------------------------------------------------------------------
+  - name: submit-service
+    url:             http://10.0.1.5:3200
+    connect_timeout: 5000
+    read_timeout:    10000
+    write_timeout:   10000
+    retries:         3
+
+    routes:
+      - name:          submit-frontend-route
+        paths:         [/submit]
+        strip_path:    true
+        preserve_host: false
+        methods:       [GET, HEAD, OPTIONS]
+
+      - name:          submit-api-route
+        paths:         [/submit]
+        strip_path:    false
+        preserve_host: false
+        methods:       [POST]
+        plugins:
+          - name: rate-limiting
+            config:
+              minute:              10
+              policy:              local
+              error_code:          429
+              error_message:       "Rate limit exceeded - Submit API allows 10 req/min. Retry after 60 seconds."
+              hide_client_headers: false
+
+      - name:          types-route
+        paths:         [/types]
+        strip_path:    false
+        preserve_host: false
+        methods:       [GET, HEAD]
+
+      - name:          docs-route
+        paths:         [/docs]
+        strip_path:    false
+        preserve_host: false
+        methods:       [GET, HEAD]
+
+  # ---------------------------------------------------------------------------
+  # Moderate Service - VM3 (10.0.1.7:3300)
+  # Runs on the dedicated moderation VM.
+  #
+  # Human moderators review jokes before they enter the database.
+  # Authentication handled inside the service via Auth0 OIDC.
+  #
+  # IMPORTANT: AUTH0_BASE_URL must be set to https://<KONG_PUBLIC_IP>  (no path suffix)
+  #            Auth0 Allowed Callback URL:    https://<KONG_PUBLIC_IP>/callback
+  #            Auth0 Allowed Logout URL:      https://<KONG_PUBLIC_IP>/moderate-ui
+  #
+  # GET  /moderate-ui  -> Moderation UI (HTML frontend)
+  # GET  /moderate     -> Pull next joke from queue (API, Auth0 protected)
+  # POST /moderated    -> Approve edited joke (API, Auth0 protected)
+  # POST /reject       -> Discard joke (API, Auth0 protected)
+  # *    /login,/logout,/callback,/me -> Auth0 OIDC flow endpoints
+  # ---------------------------------------------------------------------------
+  - name: moderate-service
+    url:             http://10.0.1.7:3300
+    connect_timeout: 5000
+    read_timeout:    15000
+    write_timeout:   10000
+    retries:         2
+
+    routes:
+      - name:          moderate-frontend-route
+        paths:         [/moderate-ui]
+        strip_path:    true
+        preserve_host: false
+        methods:       [GET, HEAD, OPTIONS]
+
+      - name:          moderate-get-route
+        paths:         [/moderate]
+        strip_path:    false
+        preserve_host: false
+        methods:       [GET, HEAD]
+        # Defense-in-depth: rate-limit polling regardless of auth mode.
+        # 60 req/min = 1 poll/sec max, matching the UI's POLL_MIN interval.
+        plugins:
+          - name: rate-limiting
+            config:
+              minute:              60
+              policy:              local
+              error_code:          429
+              error_message:       "Rate limit exceeded - Moderation poll allows 60 req/min."
+              hide_client_headers: false
+
+      - name:          moderated-post-route
+        paths:         [/moderated]
+        strip_path:    false
+        preserve_host: false
+        methods:       [POST, OPTIONS]
+        plugins:
+          - name: rate-limiting
+            config:
+              minute:              30
+              policy:              local
+              error_code:          429
+              error_message:       "Rate limit exceeded - Approve endpoint allows 30 req/min."
+              hide_client_headers: false
+
+      - name:          reject-route
+        paths:         [/reject]
+        strip_path:    false
+        preserve_host: false
+        methods:       [POST, OPTIONS]
+        plugins:
+          - name: rate-limiting
+            config:
+              minute:              30
+              policy:              local
+              error_code:          429
+              error_message:       "Rate limit exceeded - Reject endpoint allows 30 req/min."
+              hide_client_headers: false
+
+      - name:          moderate-auth-route
+        paths:         [/login, /logout, /callback, /me, /auth-status]
+        strip_path:    false
+        preserve_host: false
+        methods:       [GET, POST, OPTIONS]
+
+      - name:          moderate-types-route
+        paths:         [/moderate-types]
+        strip_path:    false
+        preserve_host: false
+        methods:       [GET, HEAD]
+
+  # ---------------------------------------------------------------------------
+  # RabbitMQ Management UI - VM2 (10.0.1.5:15672)
+  #
+  # The management UI is a SPA that:
+  #   - loads at /mq-admin/   (trailing slash required — strip_path removes prefix)
+  #   - fetches static assets at /mq-admin/js/, /mq-admin/img/ etc
+  #   - makes API calls to absolute /api/... paths
+  # Route /mq-admin handles the page + static assets (strip_path=true).
+  # Route /api handles the SPA's absolute API calls (strip_path=false).
+  # Access: https://<KONG_PUBLIC_IP>/mq-admin/  credentials: guest / guest
+  # ---------------------------------------------------------------------------
+  - name: rabbitmq-management
+    url:             http://10.0.1.5:15672
+    connect_timeout: 5000
+    read_timeout:    10000
+    write_timeout:   10000
+    retries:         1
+
+    routes:
+      - name:          mq-admin-route
+        paths:         [/mq-admin]
+        strip_path:    true
+        preserve_host: false
+        methods:       [GET, HEAD, POST, PUT, DELETE, OPTIONS]
+        plugins:
+          - name: ip-restriction
+            config:
+              allow:
+                - 10.0.0.0/8   # Azure VNet only — use SSH tunnel for external access
+                - 127.0.0.0/8  # Kong VM localhost
+              deny:
+                - 0.0.0.0/0    # deny all other IPs explicitly
+
+      - name:          mq-api-route
+        paths:         [/api]
+        strip_path:    false
+        preserve_host: false
+        methods:       [GET, HEAD, POST, PUT, DELETE, OPTIONS]
+        plugins:
+          - name: ip-restriction
+            config:
+              allow:
+                - 10.0.0.0/8
+                - 127.0.0.0/8
+              deny:
+                - 0.0.0.0/0    # deny all other IPs explicitly
+
+  # ---------------------------------------------------------------------------
+  # ETL Service - VM1 (co-located with joke-service on 10.0.1.4:3001)
+  # Health endpoint only — allows operators to verify ETL status via Kong.
+  #
+  # How the path rewrite works:
+  #   Service URL:  http://10.0.1.4:3001/health
+  #   Route path:   /etl-health   strip_path: true
+  #   → Kong strips /etl-health from the path (leaves ''), appends '' to
+  #     service URL → upstream sees GET /health  ✓
+  # ---------------------------------------------------------------------------
+  - name: etl-service
+    url:             http://10.0.1.4:3001/health
+    connect_timeout: 5000
+    read_timeout:    5000
+    write_timeout:   5000
+    retries:         1
+
+    routes:
+      - name:          etl-health-route
+        paths:         [/etl-health]
+        strip_path:    true
+        preserve_host: false
+        methods:       [GET, HEAD]

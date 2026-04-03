@@ -1,0 +1,102 @@
+# =====================================================================
+# VM2 Docker Compose -- submit-vm (Standard_B1s, 10.0.1.5)
+# =====================================================================
+# Services on this VM:
+#   rabbitmq       - message broker (AMQP 5672 VNet-only, UI 15672 restricted)
+#   submit-service - REST API + submit frontend (public port 3200)
+#
+# Cross-VM traffic:
+#   ETL (on VM1)      -> RabbitMQ here via AMQP port 5672 (VNet only)
+#   Moderate (on VM3) -> RabbitMQ here via AMQP port 5672 (VNet only)
+#
+# Option 4 changes:
+#   - submit-service no longer proxies /types to joke-service via HTTP
+#   - Types are delivered via ECST (Event-Carried State Transfer):
+#     ETL publishes type_update fanout events after new type insertion
+#     submit-service subscribes to sub_type_update queue and writes cache
+#   - JOKE_SERVICE_URL env var removed (no longer needed)
+# =====================================================================
+
+services:
+
+  # ─────────────────────────────────────────────────────────────────
+  # RabbitMQ 3.12 with Management UI
+  #
+  # Port exposure explained:
+  #   5672  – AMQP protocol. Bound to host so VM1's ETL can connect
+  #           via the Azure VNet (private IP 10.0.1.5:5672).
+  #           NSG rule Allow-AMQP-VNet uses "VirtualNetwork" service
+  #           tag → only Azure VNet traffic reaches this port.
+  #   15672 – Management UI. Bound to host but NSG restricts it to
+  #           your IP only (rule Allow-RabbitMQ-Management).
+  #           Never exposed to the public internet.
+  # ─────────────────────────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: jokes_rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      # Named volume — durable queue definitions and persistent messages
+      # survive container restarts and VM reboots.
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"    # AMQP — protected by NSG (VirtualNetwork tag only)
+      - "15672:15672"  # Management UI — protected by NSG (your IP only)
+    networks:
+      - vm2_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout:  5s
+      retries:  10
+      start_period: 30s
+
+  # Submit Service -- public REST API + frontend + Swagger
+  #
+  # Image is built and pushed to Docker Hub by the CI/CD pipeline
+  # (.github/workflows/deploy-submit.yml) on every push to main.
+  # Set SUBMIT_IMAGE in infra/.env.vm2 (see .env.vm2.example).
+  # Option 4: /types is served from ECST cache (no HTTP proxy to joke-service).
+  # The cache is populated automatically when ETL publishes type_update events
+  # to the sub_type_update queue that submit-service subscribes to.
+  submit-service:
+    image: ${SUBMIT_IMAGE:-your-dockerhub-username/submit-service:latest}
+    container_name: jokes_submit_service
+    environment:
+      RABBITMQ_HOST:       rabbitmq      # internal Docker DNS (same vm2_network)
+      RABBITMQ_USER:       ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD:   ${RABBITMQ_PASSWORD}
+      # PUBLIC_GATEWAY_BASE: Kong's public URL (e.g. https://<KONG_PUBLIC_IP>)
+      # Required so the Swagger UI defaults to the Azure server instead of localhost
+      # and so frontend API calls route through Kong.
+      # Set in infra/.env.vm2 (see .env.vm2.example).
+      PUBLIC_GATEWAY_BASE: ${PUBLIC_GATEWAY_BASE:-}
+      PORT:                4200
+    ports:
+      - "3200:4200"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      # Cache file survives container rebuilds and VM reboots.
+      # Ensures GET /types works even when VM1 (Joke service) is down.
+      - type_cache:/app/cache
+    networks:
+      - vm2_network
+    restart: unless-stopped
+
+# ─────────────────────────────────────────────────────────────────
+# Named volumes
+# ─────────────────────────────────────────────────────────────────
+volumes:
+  rabbitmq_data:
+    driver: local
+  type_cache:
+    driver: local
+
+networks:
+  vm2_network:
+    driver: bridge

@@ -1,0 +1,21 @@
+{
+  "name": "submit-service",
+  "version": "2.0.0",
+  "description": "Joke submission microservice — Express, RabbitMQ, Swagger UI",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "check": "node --check server.js"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  },
+  "dependencies": {
+    "amqplib":            "^0.10.3",
+    "express":            "^4.18.2",
+    "helmet":             "^7.1.0",
+    "swagger-jsdoc":      "^6.2.8",
+    "swagger-ui-express": "^5.0.0"
+  }
+}

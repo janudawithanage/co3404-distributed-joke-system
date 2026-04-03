@@ -144,12 +144,12 @@ CI/CD pipelines (`.github/workflows/`):
 
 | Workflow | Trigger | Action |
 |---|---|---|
-| `validate.yml` | Any push | Lint / validate configs |
-| `deploy-joke.yml` | `joke-service/**` → main | Build image → push → deploy VM1 → health check |
-| `deploy-submit.yml` | `submit-service/**` → main | Build image → push → deploy VM2 → health check |
-| `deploy-moderate.yml` | `moderate-service/**` → main | Build image → push → deploy VM3 → health check |
-| `deploy-etl.yml` | `etl-service/**` → main | Build image → push → deploy VM1 → health check |
-| `deploy-kong.yml` | `infra/kong/kong.yml` → main | SCP config to VM4 → reload Kong → health check |
+| `validate.yml` | Every push to main | Lint JS, validate `docker compose config` |
+| `deploy-joke.yml` | Manual (`workflow_dispatch`) | Build image → push to Docker Hub → deploy VM1 → health check |
+| `deploy-submit.yml` | Manual (`workflow_dispatch`) | Build image → push to Docker Hub → deploy VM2 → health check |
+| `deploy-moderate.yml` | Manual (`workflow_dispatch`) | Build image → push to Docker Hub → deploy VM3 → health check |
+| `deploy-etl.yml` | Manual (`workflow_dispatch`) | Build image → push to Docker Hub → deploy VM1 → health check |
+| `deploy-kong.yml` | Manual (`workflow_dispatch`) | SCP config to VM4 → reload Kong → health check |
 
 ---
 

@@ -20,12 +20,9 @@
 name: Deploy Kong Config
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "infra/kong/kong.yml"
-      - "infra/kong/docker-compose.yml"
-  workflow_dispatch: # allow manual trigger from the GitHub Actions UI
+  # Deployment requires secrets (KONG_VM_HOST, KONG_VM_SSH_PRIVATE_KEY, etc.)
+  # Trigger manually: GitHub → Actions → Deploy Kong config → Run workflow
+  workflow_dispatch:
 
 jobs:
   deploy-kong:

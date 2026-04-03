@@ -27,11 +27,9 @@
 name: Deploy Submit Service
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "submit-service/**"
-      - ".github/workflows/deploy-submit.yml"
+  # Deployment requires secrets (DOCKER_HUB_TOKEN, VM2_HOST, VM2_SSH_PRIVATE_KEY, etc.)
+  # Trigger manually: GitHub → Actions → Deploy submit-service → Run workflow
+  workflow_dispatch:
 
 env:
   IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/submit-service

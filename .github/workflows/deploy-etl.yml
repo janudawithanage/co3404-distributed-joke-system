@@ -29,11 +29,9 @@
 name: Deploy ETL Service
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "etl-service/**"
-      - ".github/workflows/deploy-etl.yml"
+  # Deployment requires secrets (DOCKER_HUB_TOKEN, VM1_HOST, VM1_SSH_PRIVATE_KEY, etc.)
+  # Trigger manually: GitHub → Actions → Deploy etl-service → Run workflow
+  workflow_dispatch:
 
 env:
   IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/etl-service

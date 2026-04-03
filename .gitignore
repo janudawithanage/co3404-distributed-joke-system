@@ -3,9 +3,15 @@ node_modules/
 .env.*
 *.env
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# macOS metadata — never commit
+# Editor / OS artefacts — never commit
 **/.DS_Store
+*.swp
+*.swo
+.vscode/*.log
 
 # ── LaTeX build artefacts (keep .tex and .pdf, exclude temp files) ───────────
 report/*.aux
@@ -29,6 +35,9 @@ infra/terraform/terraform.tfstate
 infra/terraform/terraform.tfstate.backup
 infra/terraform/terraform.tfvars
 infra/terraform/*.tfplan
+# Safety net — catch any *.tfstate that lands anywhere else in the repo
+*.tfstate
+*.tfstate.backup
 
 # ── Kong generated/secret files ──────────────────────────────────────────────
 # kong.yml is the production Kong declarative config for VM4.

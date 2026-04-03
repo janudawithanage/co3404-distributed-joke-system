@@ -27,9 +27,9 @@ set -euo pipefail
 VM3_HOST=""                             # e.g. "52.163.x.x"  (VM3 public IP from Azure portal)
 KONG_PUBLIC_IP=""                       # Kong VM public IP — run: terraform -chdir=infra/terraform output -raw kong_public_ip
 DOCKER_IMAGE=""                         # e.g. "youruser/moderate-service:latest"
-RABBITMQ_HOST="10.0.1.5"               # VM2 private IP (default)
-RABBITMQ_USER="guest"                  # ⚠ Change to match VM2's RABBITMQ_USER
-RABBITMQ_PASSWORD="guest"              # ⚠ Change to match VM2's RABBITMQ_PASSWORD
+RABBITMQ_HOST="10.0.1.5"                        # VM2 private IP (default — matches Terraform config)
+RABBITMQ_USER="REPLACE_WITH_RABBITMQ_USER"      # Must match RABBITMQ_USER set in infra/.env.vm2
+RABBITMQ_PASSWORD="REPLACE_WITH_STRONG_RABBITMQ_PASSWORD"  # Must match RABBITMQ_PASSWORD in infra/.env.vm2
 
 AUTH0_SECRET=""                         # Random 32+ char string (generate: openssl rand -hex 32)
 AUTH0_CLIENT_ID=""                      # From Auth0 Application > Settings > Client ID
@@ -38,10 +38,10 @@ AUTH0_ISSUER_BASE_URL=""               # e.g. "https://your-tenant.auth0.com"
 SSH_KEY="$HOME/.ssh/co3404_key"
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Guard: check all required values are set
-for var in VM3_HOST KONG_PUBLIC_IP DOCKER_IMAGE AUTH0_SECRET AUTH0_CLIENT_ID AUTH0_CLIENT_SECRET AUTH0_ISSUER_BASE_URL; do
-  if [[ -z "${!var}" ]]; then
-    echo "❌  ERROR: '$var' is not set. Edit this script and fill in your values."
+# Guard: check all required values are set (and none still have REPLACE_WITH_* placeholders)
+for var in VM3_HOST KONG_PUBLIC_IP DOCKER_IMAGE AUTH0_SECRET AUTH0_CLIENT_ID AUTH0_CLIENT_SECRET AUTH0_ISSUER_BASE_URL RABBITMQ_USER RABBITMQ_PASSWORD; do
+  if [[ -z "${!var}" ]] || [[ "${!var}" == REPLACE_WITH_* ]]; then
+    echo "❌  ERROR: '$var' is not set (or still has a placeholder). Edit this script and fill in your values."
     exit 1
   fi
 done

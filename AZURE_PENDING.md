@@ -1,80 +1,132 @@
 # Azure Pending Steps Checklist
 
 > **Status:** Local stack fully validated — 59/59 tests pass.  
-> All items below require active Azure portal / CLI access.
+> Hosted Azure deployment is frozen at **12 Mar 2026** (commit `16854a0`).  
+> All items below require active Azure portal / CLI or SSH access.  
+> See `HOSTED_VS_LOCAL_RECOVERY_REPORT.md` for the full drift analysis.
 
 ---
 
-## 1. Infrastructure — Azure Values Needed
+## 0. What Is Already Known (no Azure access needed)
 
-| Value | How to Obtain | Used In |
-|-------|--------------|---------|
-| `VM1_PUBLIC_IP` | Azure Portal → VMs → joke-vm → Overview | GitHub Secrets, smoke-test.sh |
-| `VM2_PUBLIC_IP` | Azure Portal → VMs → submit-vm → Overview | GitHub Secrets, smoke-test.sh |
-| `VM3_PUBLIC_IP` | Azure Portal → VMs → moderate-vm → Overview | GitHub Secrets |
-| `VM4_PUBLIC_IP` (Kong) | `terraform output -raw kong_public_ip` OR Azure Portal → kong-vm | All env files, Auth0 config |
-| `VM2_PRIVATE_IP` | Azure Portal → submit-vm → Networking (usually `10.0.1.5`) | `RABBITMQ_HOST` in vm1 + vm3 `.env` |
+These values have been confirmed from Terraform state, env files, and live probing:
+
+| Value | Confirmed Value | Source |
+|---|---|---|
+| Kong public IP | `85.211.240.162` | `terraform output -raw kong_public_ip` + live probe |
+| Kong private IP (VNet) | `10.0.1.6` | Terraform state (`azurerm_network_interface.nic_kong`) |
+| VM1 private IP (joke + ETL) | `10.0.1.4` | Terraform variable default; confirmed in vm1 env |
+| VM2 private IP (submit + RabbitMQ) | `10.0.1.5` | `infra/.env.vm1` → `RABBITMQ_HOST=10.0.1.5` |
+| VM3 private IP (moderate) | `10.0.1.7` | Terraform variable default; confirmed in vm3 env |
+| `PUBLIC_GATEWAY_BASE` (VM1 + VM2) | `https://85.211.240.162` | `infra/.env.vm1`, `infra/.env.vm2` |
+| `RABBITMQ_HOST` (VM1 + VM3) | `10.0.1.5` | `infra/.env.vm1`, `infra/.env.vm3` |
+| Docker Hub username | `janudaw` | `infra/.env.vm1` → `JOKE_IMAGE=janudaw/joke-service:latest` |
+| Kong version | `3.9.1` | Live `Server: kong/3.9.1` response header |
+| Auth mode on hosted | `unconfigured` | Live `GET /me` response |
+
+### Values still missing (require Azure or Auth0 access)
+
+| Value | Where to Get It |
+|---|---|
+| VM1 public IP | Azure Portal → VMs → joke-vm → Overview |
+| VM2 public IP | Azure Portal → VMs → submit-vm → Overview |
+| VM3 public IP | Azure Portal → VMs → moderate-vm → Overview |
+| VM1 SSH private key | `~/.ssh/co3404_key` (local machine) or Azure key vault |
+| VM2 SSH private key | Same key pair as VM1 |
+| VM3 SSH private key | Same key pair as VM1/VM2 |
+| RabbitMQ credentials | On VM2 — `cat ~/co3404/.env | grep RABBITMQ` after SSH |
+| MySQL credentials | On VM1 — `cat ~/co3404/.env | grep DB_` after SSH |
+| Auth0 Client ID | Auth0 Dashboard → Applications → co3404-moderate |
+| Auth0 Client Secret | Auth0 Dashboard → Applications → co3404-moderate |
+| Auth0 Domain / Issuer URL | Auth0 Dashboard → Applications → co3404-moderate → Domain |
+| `AUTH0_SECRET` (32-char random) | Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+
+---
+
+## 1. Stale Deployed Builds — Services That Must Be Redeployed
+
+All four service images are frozen at March 2026. Every change since then is local-only.
+
+| Service | Hosted build date | Image on Docker Hub | What changed locally |
+|---|---|---|---|
+| `joke-service` | Sat 07 Mar 2026 | `janudaw/joke-service:latest` (stale) | New UI, `/config.js` route, `dbType` in health |
+| `submit-service` | Sat 07 Mar 2026 | `janudaw/submit-service:latest` (stale) | New UI, 500-char validation, Swagger IP fix |
+| `moderate-service` | Thu 12 Mar 2026 | `janudaw/moderate-service:latest` (stale) | New UI, `/auth-status`, `/moderate-types`, auth banner |
+| `etl-service` | Mar 2026 (built from source on VM1) | **Not on Docker Hub** | `INSERT IGNORE`, Mongo guard fix |
+| `kong.yml` | Thu 12 Mar 2026 (on Kong VM) | N/A (file, not image) | 5 missing routes added, ip-restriction on /mq-admin |
+
+**Before redeploying:** CI/CD (see section 3) will rebuild and push all images automatically once secrets are set. Manual push is only needed if CI/CD cannot be configured.
 
 ---
 
 ## 2. GitHub Secrets — Must Be Set Before CI/CD Works
 
+
 Go to: **Repository → Settings → Secrets and variables → Actions → New repository secret**
 
-| Secret Name | Value |
-|-------------|-------|
-| `DOCKER_HUB_USERNAME` | Your Docker Hub username |
-| `DOCKER_HUB_TOKEN` | Docker Hub → Account Settings → Security → New Access Token |
-| `VM1_HOST` | `VM1_PUBLIC_IP` (from step 1) |
-| `VM1_SSH_PRIVATE_KEY` | Contents of `~/.ssh/id_rsa` (or Azure-generated key) for VM1 |
-| `VM2_HOST` | `VM2_PUBLIC_IP` (from step 1) |
-| `VM2_SSH_PRIVATE_KEY` | Contents of SSH private key for VM2 |
-| `VM3_HOST` | `VM3_PUBLIC_IP` (from step 1) |
-| `VM3_SSH_PRIVATE_KEY` | Contents of SSH private key for VM3 |
-| `KONG_VM_HOST` | `VM4_PUBLIC_IP` (Kong VM, from step 1) |
-| `KONG_VM_SSH_PRIVATE_KEY` | Contents of SSH private key for Kong VM |
-| `KONG_PUBLIC_URL` | `http://<VM4_PUBLIC_IP>` (or `https://` if TLS set up) |
+> ✅ = value already confirmed, enter as-is.  🔴 = must collect before setting.
+
+| Secret Name | Status | Value / Where to Get It |
+|-------------|--------|--------------------------|
+| `DOCKER_HUB_USERNAME` | ✅ | `janudaw` |
+| `DOCKER_HUB_TOKEN` | 🔴 | Docker Hub → Account Settings → Security → New Access Token |
+| `VM1_HOST` | 🔴 | Azure Portal → VMs → joke-vm → Overview → Public IP |
+| `VM1_SSH_PRIVATE_KEY` | 🔴 | `cat ~/.ssh/co3404_key` (or whichever key was used for VM1) |
+| `VM2_HOST` | 🔴 | Azure Portal → VMs → submit-vm → Overview → Public IP |
+| `VM2_SSH_PRIVATE_KEY` | 🔴 | Same key pair as VM1 |
+| `VM3_HOST` | 🔴 | Azure Portal → VMs → moderate-vm → Overview → Public IP |
+| `VM3_SSH_PRIVATE_KEY` | 🔴 | Same key pair as VM1/VM2 |
+| `KONG_VM_HOST` | ✅ | `85.211.240.162` |
+| `KONG_VM_SSH_PRIVATE_KEY` | 🔴 | Same key pair — or check `infra/terraform/` for provisioner key path |
+| `KONG_PUBLIC_URL` | ✅ | `https://85.211.240.162` |
 
 ---
 
 ## 3. VM Environment Files — Exact Values to Fill In
 
+> Lines marked ✅ are already filled in the committed file.  Lines marked 🔴 are still `REPLACE_WITH_*` placeholders.
+
 ### VM1 (`infra/.env.vm1`) — joke-service + ETL + MySQL
 ```
-DB_ROOT_PASSWORD=<choose a strong password>
+DB_ROOT_PASSWORD=<choose a strong password>          # 🔴 set before first docker compose up
 DB_NAME=jokesdb
 DB_USER=jokesuser
-DB_PASSWORD=<choose a strong password>
+DB_PASSWORD=<choose a strong password>               # 🔴 set before first docker compose up
 DB_TYPE=mysql
-RABBITMQ_HOST=<VM2_PRIVATE_IP>       # e.g. 10.0.1.5
-RABBITMQ_USER=<choose>
-RABBITMQ_PASSWORD=<choose>
-PUBLIC_GATEWAY_BASE=http://<VM4_PUBLIC_IP>
-JOKE_IMAGE=<DOCKER_HUB_USERNAME>/joke-service:latest
-ETL_IMAGE=<DOCKER_HUB_USERNAME>/etl-service:latest
+RABBITMQ_HOST=10.0.1.5                               # ✅ already set
+RABBITMQ_USER=<choose>                               # 🔴 set — must match VM2 and VM3
+RABBITMQ_PASSWORD=<choose>                           # 🔴 set — must match VM2 and VM3
+PUBLIC_GATEWAY_BASE=https://85.211.240.162           # ✅ already set
+JOKE_IMAGE=janudaw/joke-service:latest               # ✅ already set
+ETL_IMAGE=janudaw/etl-service:latest                 # ✅ already set (build fallback exists)
 ```
 
 ### VM2 (`infra/.env.vm2`) — submit-service + RabbitMQ
 ```
-RABBITMQ_USER=<same as VM1>
-RABBITMQ_PASSWORD=<same as VM1>
-PUBLIC_GATEWAY_BASE=http://<VM4_PUBLIC_IP>
-SUBMIT_IMAGE=<DOCKER_HUB_USERNAME>/submit-service:latest
+RABBITMQ_USER=<same as VM1>                          # 🔴 set — must match VM1
+RABBITMQ_PASSWORD=<same as VM1>                      # 🔴 set — must match VM1
+PUBLIC_GATEWAY_BASE=https://85.211.240.162           # ✅ already set
+SUBMIT_IMAGE=janudaw/submit-service:latest           # ✅ already set
 ```
 
 ### VM3 (`infra/.env.vm3`) — moderate-service (Auth0 required)
 ```
 AUTH_ENABLED=true
-AUTH0_CLIENT_ID=<from Auth0 Application>
-AUTH0_CLIENT_SECRET=<from Auth0 Application>
-AUTH0_ISSUER_BASE_URL=https://<your-auth0-tenant>.auth0.com
-AUTH0_AUDIENCE=<your Auth0 API Identifier, or leave blank>
-AUTH0_SECRET=<generate: openssl rand -hex 32>
-RABBITMQ_HOST=<VM2_PRIVATE_IP>
-RABBITMQ_USER=<same as VM1>
-RABBITMQ_PASSWORD=<same as VM1>
-PUBLIC_GATEWAY_BASE=http://<VM4_PUBLIC_IP>
-MODERATE_IMAGE=<DOCKER_HUB_USERNAME>/moderate-service:latest
+AUTH0_BASE_URL=https://85.211.240.162                # ✅ (confirm after Kong is live)
+AUTH0_CLIENT_ID=<from Auth0 Application>             # 🔴 collect from Auth0 dashboard
+AUTH0_CLIENT_SECRET=<from Auth0 Application>         # 🔴 collect from Auth0 dashboard
+AUTH0_ISSUER_BASE_URL=https://<tenant>.auth0.com     # 🔴 collect from Auth0 dashboard
+AUTH0_AUDIENCE=<your Auth0 API Identifier>           # 🔴 or leave blank if not using RBAC
+AUTH0_SECRET=<generate below>                        # 🔴 generate fresh
+RABBITMQ_HOST=10.0.1.5                               # ✅ already set
+RABBITMQ_USER=<same as VM1>                          # 🔴 set — must match VM1/VM2
+RABBITMQ_PASSWORD=<same as VM1>                      # 🔴 set — must match VM1/VM2
+DOCKER_IMAGE=janudaw/moderate-service:latest         # ✅ already set
+```
+
+Generate `AUTH0_SECRET`:
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
 ---
@@ -92,9 +144,9 @@ In the Application settings:
 
 | Setting | Value |
 |---------|-------|
-| Allowed Callback URLs | `http://<VM4_PUBLIC_IP>/callback` |
-| Allowed Logout URLs | `http://<VM4_PUBLIC_IP>` |
-| Allowed Web Origins | `http://<VM4_PUBLIC_IP>` |
+| Allowed Callback URLs | `https://85.211.240.162/callback` |
+| Allowed Logout URLs | `https://85.211.240.162` |
+| Allowed Web Origins | `https://85.211.240.162` |
 
 ### 4c. Create API (optional — for RBAC)
 If using `AUTH0_AUDIENCE`:
@@ -109,26 +161,34 @@ If `MODERATOR_ROLE` is enforced in `moderate-service/auth.js`:
 
 ---
 
-## 5. Terraform (Kong VM4)
+## 5. Terraform (Kong VM only)
 
+> **Important:** Only the **Kong VM** (`10.0.1.6` / `85.211.240.162`) is managed by Terraform.  
+> VM1, VM2, VM3 were provisioned **manually** (not in Terraform state) and must be managed via SSH / Azure Portal directly.
+
+If you need to **re-provision the Kong VM** (e.g. after deallocation):
 ```bash
 cd infra/terraform
 
 # Copy and fill in variables
 cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars: set subscription_id, resource_group, admin_username, etc.
+# Edit terraform.tfvars: set subscription_id, my_ip, etc.
+# Kong public IP is already known: 85.211.240.162
 
 # Initialise
 terraform init
 
-# Plan
+# Check state first — Kong VM may already exist
+terraform state list
+
+# Plan — should show no changes if Kong VM is already running
 terraform plan
 
-# Apply — provisions VM4, generates kong.yml from template
+# Apply only if Kong VM needs reprovisioning
 terraform apply
 
-# Get Kong public IP
-terraform output -raw kong_public_ip
+# Confirm Kong IP
+terraform output -raw kong_public_ip   # expect: 85.211.240.162
 ```
 
 The `kong.yml` Terraform generates uses `kong.yml.tpl` — already reviewed and correct.
@@ -201,36 +261,43 @@ docker build -t $DHUB/etl-service:latest     etl-service/    && docker push $DHU
 
 ---
 
-## 9. Kong Deployment to VM4
+## 9. Kong Deployment to Kong VM (`85.211.240.162`)
 
-After Terraform provisions VM4:
+Kong is already running. This step is only needed if Kong config must be **reloaded** with the new `kong.yml`.
+
+The CI/CD workflow (`deploy-kong.yml`) will do this automatically when `infra/kong/kong.yml` is pushed.  
+To trigger manually:
 
 ```bash
-# Copy generated kong.yml and certs to Kong VM
-scp infra/kong/kong.yml azureuser@<VM4_PUBLIC_IP>:~/kong.yml
-scp infra/kong/docker-compose.yml azureuser@<VM4_PUBLIC_IP>:~/
+# Option A: use CI/CD workflow_dispatch from GitHub Actions UI
+# (deploy-kong.yml supports workflow_dispatch)
 
-# Start Kong
-ssh azureuser@<VM4_PUBLIC_IP> "docker compose up -d"
+# Option B: push a trivial change to infra/kong/kong.yml to trigger the workflow
+git commit --allow-empty -m "ci: reload kong config" && git push
+
+# Option C: manual SSH deploy (if CI/CD not yet configured)
+scp infra/kong/kong.yml azureuser@85.211.240.162:~/kong/kong.yml
+scp infra/kong/docker-compose.yml azureuser@85.211.240.162:~/
+ssh azureuser@85.211.240.162 "cd ~/kong && docker compose down && docker compose up -d"
 
 # Verify
-curl http://<VM4_PUBLIC_IP>/health
+curl -k https://85.211.240.162/health
 ```
 
 ---
 
 ## 10. Post-Deployment Smoke Test
 
-Update `infra/scripts/smoke-test.sh` with real IPs, then run:
+Kong IP is known. VM1/VM2/VM3 public IPs must be filled in from Azure Portal.
 
 ```bash
-# Edit KONG_URL, VM1_URL, VM2_URL, VM3_URL in smoke-test.sh
-KONG_URL=http://<VM4_PUBLIC_IP> bash infra/scripts/smoke-test.sh
+# Kong IP is confirmed — run Kong-level smoke test immediately:
+bash infra/scripts/smoke-test.sh 85.211.240.162
 ```
 
-Or run the full test suite against the deployed stack:
+Full test suite (once VM public IPs are known):
 ```bash
-KONG=http://<VM4_PUBLIC_IP> \
+KONG=https://85.211.240.162 \
 JOKE=http://<VM1_PUBLIC_IP>:3000 \
 SUBM=http://<VM2_PUBLIC_IP>:3200 \
 MODR=http://<VM3_PUBLIC_IP>:3300 \
@@ -238,32 +305,131 @@ ETL=http://<VM1_PUBLIC_IP>:3001 \
 node test-flows.js
 ```
 
+Expected health check responses after redeploy:
+
+| Endpoint | Expected |
+|----------|----------|
+| `GET /health` (via Kong) | `{"status":"ok","dbType":"mysql"}` |
+| `GET /auth-status` (via Kong) | `{"authEnabled":true,"mode":"oidc"}` |
+| `GET /mq-admin/` (via Kong) | `403 Forbidden` (ip-restriction) |
+
 ---
 
 ## 11. CI/CD — Verify Workflows
 
-After setting all GitHub Secrets (step 2), trigger a test run:
+Each workflow is **path-scoped** and only triggers on changes to its own directory:
+
+| Workflow | Trigger path | Deploys to |
+|----------|-------------|------------|
+| `deploy-joke.yml` | `joke-service/**` | VM1 |
+| `deploy-submit.yml` | `submit-service/**` | VM2 |
+| `deploy-moderate.yml` | `moderate-service/**` | VM3 |
+| `deploy-etl.yml` | `etl-service/**` | VM1 |
+| `deploy-kong.yml` | `infra/kong/kong.yml`, `infra/kong/docker-compose.yml` + `workflow_dispatch` | Kong VM |
+
+All five service directories already have local changes ahead of the hosted build, so **any push to `main`** will trigger all four service deploys simultaneously. Kong must also be reloaded after services are up.
+
+After setting all GitHub Secrets (step 2), push to trigger all deploys:
 
 ```bash
-# Push a no-op change to main to trigger all deploy workflows
-git commit --allow-empty -m "ci: trigger deploy workflows" && git push
+# A normal push will trigger all path-scoped workflows automatically
+git push origin main
+
+# Kong workflow: trigger via GitHub Actions UI (workflow_dispatch)
+# or push a whitespace change to infra/kong/kong.yml
 ```
 
-Expected: all four deploy workflows (`deploy-joke`, `deploy-submit`, `deploy-etl`, `deploy-kong`) should pass.
+Expected: `deploy-joke`, `deploy-submit`, `deploy-moderate`, `deploy-etl`, and `deploy-kong` all pass green.
+
+---
+
+## 12. Exact Redeploy Order (once Azure access returns)
+
+Follow these steps **in order**. Do not proceed to the next step until the current one passes.
+
+### Step 1 — Collect required values
+- [ ] SSH into VM2: `cat ~/co3404/.env | grep RABBITMQ` → note `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
+- [ ] SSH into VM1: `cat ~/co3404/.env | grep DB_` → note `DB_ROOT_PASSWORD`, `DB_PASSWORD`
+- [ ] Azure Portal → get VM1, VM2, VM3 public IPs
+- [ ] Locate SSH private key (`~/.ssh/co3404_key` or equivalent)
+- [ ] Auth0 Dashboard → co3404-moderate application → note Client ID, Client Secret, Domain
+- [ ] Docker Hub → generate new access token (Settings → Security → New Token)
+- [ ] Generate `AUTH0_SECRET`: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+
+### Step 2 — Fill in env files
+- [ ] Update `infra/.env.vm1`: fill in `RABBITMQ_USER`, `RABBITMQ_PASSWORD`, `DB_ROOT_PASSWORD`, `DB_PASSWORD`
+- [ ] Update `infra/.env.vm2`: fill in `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
+- [ ] Update `infra/.env.vm3`: fill in all `REPLACE_WITH_*` placeholders (Auth0 + RabbitMQ credentials)
+- [ ] SCP updated env files to each VM:
+  ```bash
+  scp infra/.env.vm1 azureuser@<VM1_PUBLIC_IP>:~/.env
+  scp infra/.env.vm2 azureuser@<VM2_PUBLIC_IP>:~/.env
+  scp infra/.env.vm3 azureuser@<VM3_PUBLIC_IP>:~/.env
+  ```
+
+### Step 3 — Set all 11 GitHub Secrets
+- [ ] Repository → Settings → Secrets and variables → Actions
+- [ ] Set each secret from the table in Section 2 (3 are pre-filled: `DOCKER_HUB_USERNAME`, `KONG_VM_HOST`, `KONG_PUBLIC_URL`)
+
+### Step 4 — Push to main (triggers all service deploys)
+```bash
+git push origin main
+```
+This will trigger `deploy-joke`, `deploy-submit`, `deploy-moderate`, `deploy-etl` simultaneously.
+
+### Step 5 — Trigger Kong config reload
+After all four service workflows pass green:
+```bash
+# Via GitHub Actions UI: manually trigger deploy-kong workflow (workflow_dispatch)
+# OR:
+git commit --allow-empty -m "ci: reload kong config" -- infra/kong/kong.yml && git push
+```
+> Kong health check in `deploy-kong.yml` waits up to 30s for `/health` to return 200 — ensure services are up first.
+
+### Step 6 — Smoke test
+```bash
+bash infra/scripts/smoke-test.sh 85.211.240.162
+```
+
+### Step 7 — Verify security posture
+```bash
+# RabbitMQ admin must be blocked by ip-restriction plugin:
+curl -k https://85.211.240.162/mq-admin/    # expect: 403
+
+# Auth0 should be active on moderate-service:
+curl -k https://85.211.240.162/auth-status  # expect: {"authEnabled":true,"mode":"oidc"}
+```
 
 ---
 
 ## Summary Checklist
 
-- [ ] Note VM1, VM2, VM3, VM4 public IPs from Azure Portal
-- [ ] Note VM2 private IP
-- [ ] Run `terraform apply` for Kong VM4
-- [ ] Set all 11 GitHub Secrets
-- [ ] Fill in `infra/.env.vm1`, `.env.vm2`, `.env.vm3` with real values
-- [ ] Create Auth0 Application, configure callback URLs
-- [ ] Run vm1/vm2/vm3 setup scripts
-- [ ] Push Docker images to Docker Hub (or let CI/CD do it)
-- [ ] Deploy Kong to VM4
-- [ ] Verify NSG rules
-- [ ] Run smoke test against live stack
-- [ ] Enable CI/CD by triggering a push to `main`
+### Pre-filled (no action needed) ✅
+- [x] Kong public IP confirmed: `85.211.240.162`
+- [x] All private VNet IPs confirmed: VM1=`10.0.1.4`, VM2=`10.0.1.5`, VM3=`10.0.1.7`, Kong=`10.0.1.6`
+- [x] `PUBLIC_GATEWAY_BASE`, `RABBITMQ_HOST`, all three Docker image names already set in env files
+- [x] Kong is running on `85.211.240.162` (verified live)
+- [x] `DOCKER_HUB_USERNAME=janudaw`, `KONG_VM_HOST=85.211.240.162`, `KONG_PUBLIC_URL=https://85.211.240.162` pre-filled for GitHub Secrets
+- [x] Auth0 callback URLs updated to `https://85.211.240.162`
+
+### Must collect (requires Azure / Auth0 access) 🔴
+- [ ] VM1 public IP (Azure Portal)
+- [ ] VM2 public IP (Azure Portal)
+- [ ] VM3 public IP (Azure Portal)
+- [ ] SSH private key for all VMs (`~/.ssh/co3404_key`)
+- [ ] `RABBITMQ_USER` and `RABBITMQ_PASSWORD` (SSH into VM2 to retrieve)
+- [ ] `DB_ROOT_PASSWORD` and `DB_PASSWORD` (SSH into VM1 to retrieve)
+- [ ] Auth0 Client ID, Client Secret, Domain (Auth0 dashboard)
+- [ ] `AUTH0_SECRET` (generate fresh: `node -e "..."`)
+- [ ] Docker Hub access token (Docker Hub → Account Settings → Security)
+
+### Actions (once values collected, in order) 🔴
+- [ ] Fill in remaining `REPLACE_WITH_*` in `infra/.env.vm1`, `.env.vm2`, `.env.vm3`
+- [ ] SCP updated env files to each VM
+- [ ] Set all 11 GitHub Secrets (see Section 2)
+- [ ] `git push origin main` — triggers all four service deploy workflows
+- [ ] Trigger `deploy-kong.yml` via `workflow_dispatch` (GitHub Actions UI)
+- [ ] Verify NSG rules (Section 7)
+- [ ] Run smoke test: `bash infra/scripts/smoke-test.sh 85.211.240.162`
+- [ ] Verify: `curl -k https://85.211.240.162/mq-admin/` → `403`
+- [ ] Verify: `curl -k https://85.211.240.162/auth-status` → `{"authEnabled":true}`

@@ -1,10 +1,10 @@
 # CO3404 Distributed Joke System
 
-A distributed microservices platform for the **CO3404 Distributed Systems** module at Ulster University.
+A distributed microservices platform built as a personal project to explore distributed systems design.
 
 Jokes flow through an async pipeline: **submitted** by users → **queued** in RabbitMQ → **reviewed** by a human moderator via an Auth0-protected UI → **persisted** to MySQL → **served** through a Kong API Gateway.
 
-> **⚠️ Azure status:** VMs may be deallocated (student subscription). All features work fully in local Docker.
+> **⚠️ Azure status:** VMs may be deallocated. All features work fully in local Docker.
 > See [FINAL_STATUS.md](FINAL_STATUS.md) for the current deployment state.
 
 ---

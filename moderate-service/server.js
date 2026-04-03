@@ -114,6 +114,22 @@ if (AUTH_ENABLED) {
       '       then redeploy to enforce Auth0 login (BUG-H6 fix).'
     );
   }
+
+  // BUG-L5: Extra guard — warn loudly if the public base URL looks non-local
+  // (i.e. this process is deployed publicly but auth is still off).
+  const _baseUrl = (process.env.AUTH0_BASE_URL || process.env.PUBLIC_GATEWAY_BASE || '').toLowerCase();
+  if (_baseUrl && !_baseUrl.includes('localhost') && !_baseUrl.includes('127.0.0.1')) {
+    console.error(
+      '\n\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557\n' +
+      '\u2551  \ud83d\udd34 CRITICAL: AUTH DISABLED ON A PUBLIC-FACING DEPLOYMENT           \u2551\n' +
+      '\u2551  AUTH0_BASE_URL / PUBLIC_GATEWAY_BASE is a non-localhost URL.       \u2551\n' +
+      '\u2551  URL: ' + _baseUrl + '\n' +
+      '\u2551  The moderation API is reachable by any internet peer, NO login.   \u2551\n' +
+      '\u2551  Remove AUTH_ENABLED=false and set real AUTH0_* credentials.       \u2551\n' +
+      '\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\n'
+    );
+  }
+
   // Inject a mock req.oidc so requiresAuthJson / requiresModeratorRoleJson still
   // compile a response — they check isAuthenticated() which returns true here.
   app.use(noAuthMiddleware);

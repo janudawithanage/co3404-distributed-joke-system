@@ -25,7 +25,7 @@ SET CHARACTER SET utf8mb4;
 CREATE TABLE IF NOT EXISTS types (
   id   INT          AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(100) UNIQUE NOT NULL
-) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARSET=utf8mb4;
 
 -- Stores individual jokes linked to a type
 CREATE TABLE IF NOT EXISTS jokes (
@@ -41,7 +41,12 @@ CREATE TABLE IF NOT EXISTS jokes (
   -- prefetch(1) in moderate + manual ACK already prevents most duplication;
   -- this is a defence-in-depth constraint at the DB layer.
   UNIQUE KEY uq_joke (setup(255), punchline(255))
-) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+) DEFAULT CHARSET=utf8mb4;
+
+-- Migrate existing tables to utf8mb4 if they were created with a narrower charset
+-- (safe no-op when tables are already utf8mb4).
+ALTER TABLE types  CONVERT TO CHARACTER SET utf8mb4;
+ALTER TABLE jokes  CONVERT TO CHARACTER SET utf8mb4;
 
 -- ── Seed Data ─────────────────────────────────────────────
 

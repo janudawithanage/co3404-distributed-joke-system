@@ -94,6 +94,11 @@ async function drainQueue(modUrl) {
   const ETL  = process.env.ETL_BASE      || 'http://localhost:3001';
   const KONG = process.env.KONG_BASE     || 'http://localhost:8000';
 
+  // Pre-test queue drain: flush any stale jokes left from previous runs so they
+  // cannot be accidentally approved by FLOW 5 (recovery, Via Kong, etc.).
+  const preTestDrained = await drainQueue(MOD);
+  if (preTestDrained > 0) console.log(Y(`  ⚠ Pre-test drain: cleared ${preTestDrained} stale queue item(s)`));
+
   // ───────────────────────────────────────────────────────────────────────────
   section('FLOW 1 — HEALTH CHECKS (direct)');
   // ───────────────────────────────────────────────────────────────────────────
@@ -250,6 +255,9 @@ async function drainQueue(modUrl) {
   // ───────────────────────────────────────────────────────────────────────────
   section('FLOW 5 — MODERATE → APPROVE (GET /moderate + POST /moderated)');
   // ───────────────────────────────────────────────────────────────────────────
+  // Drain any queue items left by rate-limit submits in FLOW 4 before injecting
+  // our own controlled joke, so FLOW 5 always approves the expected joke.
+  await drainQueue(MOD);
   // Submit a fresh joke to guarantee something is in the queue
   await post(SUBM+'/submit', { setup:'Test approve joke', punchline:'Approved!', type:'testing' }).catch(() => ({ code: 0 }));
   await sleep(300);
@@ -554,8 +562,13 @@ async function drainQueue(modUrl) {
   const dbPass = process.env.DB_PASSWORD || 'jokepassword';
   const dbName = process.env.DB_NAME     || 'jokesdb';
   const cleanSQL = [
+    // Remove jokes whose type is a test-generated type (ecst*, etl*, testing)
     "DELETE j FROM jokes j JOIN types t ON j.type_id=t.id WHERE t.name REGEXP '^(ecst|etl)[0-9]+$' OR t.name='testing';",
-    "DELETE FROM types WHERE name REGEXP '^(ecst|etl)[0-9]+$' OR name='testing';"
+    // Remove the test-generated types themselves
+    "DELETE FROM types WHERE name REGEXP '^(ecst|etl)[0-9]+$' OR name='testing';",
+    // Remove jokes created directly by test flows (recovery, Via Kong, rl*)
+    // These may slip into general/programming types but are identifiable by setup text.
+    "DELETE FROM jokes WHERE setup REGEXP '^recovery [0-9]+$' OR setup='Via Kong joke' OR setup='Test approve joke' OR setup='Test reject joke' OR setup REGEXP '^rl[0-9]+$';"
   ].join(' ');
 
   try {
